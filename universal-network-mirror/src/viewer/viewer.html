@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Universal Network Mirror</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; color: #00ffcc; font-family: monospace; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; z-index: 10; }
+        .hud-item { margin-bottom: 5px; text-shadow: 0 0 5px #00ffcc; }
+        
+        #inspector {
+            position: absolute; top: 10px; right: 10px; width: 300px;
+            background: rgba(0, 10, 20, 0.9); border: 1px solid #00ffcc;
+            padding: 15px; display: none; font-family: 'Courier New', monospace;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            backdrop-filter: blur(5px); pointer-events: auto;
+            max-height: 80vh; overflow-y: auto;
+        }
+        #inspector.minimized { height: 30px; overflow: hidden; }
+        
+        #inspector-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #555; padding-bottom: 5px; margin-bottom: 10px; }
+        #inspector h2 { margin: 0; color: #fff; font-size: 18px; }
+        #btn-minimize { background: none; border: none; color: #00ffcc; cursor: pointer; font-weight: bold; }
+        
+        .section-title { color: #fff; font-size: 14px; margin-top: 15px; border-bottom: 1px dotted #555; }
+        #pie-chart { margin: 10px auto; display: block; }
+        .token-list { font-size: 10px; color: #aaa; margin-top: 5px; }
+        .token-item { display: flex; justify-content: space-between; }
+        .sample-text { font-size: 10px; color: #888; font-style: italic; margin-top: 5px; border-left: 2px solid #00ffcc; padding-left: 5px; }
+        .stat-row { display: flex; justify-content: space-between; margin: 5px 0; color: #aaa; font-size: 12px; }
+        .stat-value { color: #00ffcc; font-weight: bold; }
+        .grade-A { color: #0f0; } .grade-F { color: #f00; }
+        
+        #controls {
+            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 10px; pointer-events: auto;
+        }
+        .btn {
+            background: rgba(0, 0, 0, 0.8); border: 1px solid #00ffcc; color: #00ffcc;
+            padding: 5px 15px; cursor: pointer; font-family: monospace;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #00ffcc; color: #000; }
+        .btn.active { background: #00ffcc; color: #000; box-shadow: 0 0 10px #00ffcc; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="hud-item">UNIVERSAL NETWORK MIRROR SOTA</div>
+        <div class="hud-item" id="stats">FPS: 60 | PARTICLES: 0</div>
+        <div class="hud-item" id="time-offset">DELAY: -500ms</div>
+    </div>
+
+    <div id="controls">
+        <button class="btn" id="btn-pause">PAUSE</button>
+        <button class="btn active" id="btn-live">LIVE</button>
+    </div>
+
+    <div id="inspector">
+        <div id="inspector-header">
+            <h2 id="insp-name">DOMAIN</h2>
+            <button id="btn-minimize">_</button>
+        </div>
+        
+        <div id="inspector-body">
+            <div class="stat-row"><span>TYPE</span><span class="stat-value" id="insp-type">PLANET</span></div>
+            <div class="stat-row"><span>MASS</span><span class="stat-value" id="insp-mass">0</span></div>
+            <div class="stat-row"><span>BLOAT SCORE</span><span class="stat-value" id="insp-bloat">0</span></div>
+            <div class="stat-row"><span>RATING</span><span class="stat-value" id="insp-grade">A</span></div>
+            
+            <div class="section-title">PACKET STATS SAMPLING</div>
+            <div style="display: flex; justify-content: space-around; margin: 10px 0;">
+                <div style="text-align:center">
+                    <div style="font-size:10px; color:#aaa; margin-bottom:2px">COUNT</div>
+                    <canvas id="pie-chart-count" width="100" height="100"></canvas>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:10px; color:#aaa; margin-bottom:2px">SIZE</div>
+                    <canvas id="pie-chart-size" width="100" height="100"></canvas>
+                </div>
+            </div>
+            <div class="stat-row"><span>INTERNAL REQ</span><span class="stat-value" id="insp-internal">0 pkts / 0 KB</span></div>
+            <div class="stat-row"><span>EXTERNAL RES</span><span class="stat-value" id="insp-external">0 pkts / 0 KB</span></div>
+
+            <div class="section-title">TOP 10 DISTINCT TOKENS</div>
+            <div id="insp-tokens" class="token-list"></div>
+
+            <div class="section-title">SAMPLE OF PACKET</div>
+            <div id="insp-sample" class="sample-text"></div>
+        </div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+    <script type="module" src="viewer.js"></script>
+</body>
+</html>
