@@ -432,8 +432,9 @@ class Planet {
                     const ratio = score / maxScore;
                     
                     // 1. Radius: More important = Closer (Lower)
-                    // Range: Planet Radius + 15px to + 85px
-                    const r = this.radius + 15 + (1 - ratio) * 70;
+                    // Increased spread to 120px to reduce crowding
+                    // Range: Planet Radius + 25px to + 145px
+                    const r = this.radius + 25 + (1 - ratio) * 120;
                     
                     // 2. Speed: More frequent = Slower
                     // Inverse relationship
@@ -443,9 +444,9 @@ class Planet {
                     const tx = this.x + Math.cos(currentAngle) * r;
                     const ty = this.y + Math.sin(currentAngle) * r;
                     
-                    // 3. Size: More frequent = Larger (Non-linear scale for emphasis)
-                    // Range: 6px to 28px, emphasizing the top words more
-                    const fontSize = 6 + Math.floor(Math.pow(ratio, 1.5) * 22);
+                    // 3. Size: More frequent = Larger (High Variance)
+                    // Range: 8px to 36px, stronger power curve for dramatic difference
+                    const fontSize = 8 + Math.floor(Math.pow(ratio, 2.0) * 28);
                     
                     ctx.fillStyle = '#00ffcc';
                     ctx.font = `${fontSize}px monospace`;
