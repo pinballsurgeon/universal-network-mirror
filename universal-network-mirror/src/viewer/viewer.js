@@ -330,60 +330,10 @@ class Planet {
         decayStats(this);
         if (isPaused) return true;
 
-        if (viewMode === 'TRAFFIC') {
-            this.angle += this.speed;
-            this.x = SUN_X() + Math.cos(this.angle) * this.distance;
-            this.y = SUN_Y() + Math.sin(this.angle) * this.distance;
-        } else {
-            // Linguistic Mode: Semantic Gravity
-            // 1. Weak pull towards center to keep them on screen
-            const dx = SUN_X() - this.x;
-            const dy = SUN_Y() - this.y;
-            this.x += dx * 0.001;
-            this.y += dy * 0.001;
-
-            // 2. Semantic Attraction
-            for (const other of planets.values()) {
-                if (other === this) continue;
-                
-                // Weighted Jaccard Similarity
-                let intersection = 0;
-                let union = 0;
-                for (const [token, count] of this.tokens) {
-                    const otherCount = other.tokens.get(token) || 0;
-                    intersection += Math.min(count, otherCount);
-                    union += Math.max(count, otherCount);
-                }
-                for (const [token, count] of other.tokens) {
-                    if (!this.tokens.has(token)) union += count;
-                }
-
-                const similarity = union > 0 ? intersection / union : 0;
-                
-                if (similarity > 0.05) {
-                    const pdx = other.x - this.x;
-                    const pdy = other.y - this.y;
-                    const dist = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
-                    const force = similarity * 0.05; // Attraction strength
-                    
-                    if (dist > 100) { // Don't collapse completely
-                        this.x += (pdx / dist) * force;
-                        this.y += (pdy / dist) * force;
-                    }
-                }
-                
-                // Repulsion to prevent overlap
-                const pdx = this.x - other.x;
-                const pdy = this.y - other.y;
-                const dist = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
-                const minDist = this.radius + other.radius + 20;
-                if (dist < minDist) {
-                    const force = (minDist - dist) * 0.05;
-                    this.x += (pdx / dist) * force;
-                    this.y += (pdy / dist) * force;
-                }
-            }
-        }
+        // Physics / Solar System Logic (Same for both modes)
+        this.angle += this.speed;
+        this.x = SUN_X() + Math.cos(this.angle) * this.distance;
+        this.y = SUN_Y() + Math.sin(this.angle) * this.distance;
 
         if (this.mass > 0) {
             this.mass *= 0.999;
@@ -450,18 +400,25 @@ class Planet {
         } else {
             // Linguistic Mode: Draw Word Moons
             let angle = 0;
-            const sortedTokens = [...this.tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+            // Show top 20 tokens instead of 5
+            const sortedTokens = [...this.tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
             for (const [token, count] of sortedTokens) {
-                const r = this.radius + 15 + (count * 2);
-                const tx = this.x + Math.cos(angle + this.angle) * r;
-                const ty = this.y + Math.sin(angle + this.angle) * r;
+                // Scale distance by count slightly to layer them
+                const r = this.radius + 15 + (Math.sqrt(count) * 5); 
+                
+                // Orbit the word around the planet (add this.angle for rotation)
+                const orbitSpeed = 0.005 * (sortedTokens.length - sortedTokens.indexOf([token, count])); 
+                const currentAngle = angle + (Date.now() * orbitSpeed * 0.05);
+
+                const tx = this.x + Math.cos(currentAngle) * r;
+                const ty = this.y + Math.sin(currentAngle) * r;
                 
                 ctx.fillStyle = '#00ffcc';
-                ctx.font = '8px monospace';
+                ctx.font = '10px monospace';
                 ctx.fillText(token, tx, ty);
                 
-                // Draw connection
-                ctx.strokeStyle = 'rgba(0, 255, 204, 0.2)';
+                // Draw connection line shooting out
+                ctx.strokeStyle = 'rgba(0, 255, 204, 0.3)';
                 ctx.beginPath();
                 ctx.moveTo(this.x, this.y);
                 ctx.lineTo(tx, ty);
