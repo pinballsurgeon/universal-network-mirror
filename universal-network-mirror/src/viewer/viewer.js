@@ -108,15 +108,37 @@ function getScoredTokens(localMap, localTotal, limit = 20) {
     // Sort by initial uniqueness (score) desc
     scores.sort((a, b) => b.score - a.score);
 
-    // Redundancy Penalty: Reduce score if token is a substring of a higher-scored token
-    // This favors "machine learning" over just "learning" if both are present
+    // Cluster Analysis: Check for "Root Words" appearing in multiple N-grams
+    // If "machine" is in "machine learning" and "machine vision", boost "machine" and damp n-grams
+    const occurrences = new Map(); // word -> count of supersets
+    
     for (let i = 0; i < scores.length; i++) {
-        if (scores[i].score <= 0) continue;
-        
-        for (let j = 0; j < i; j++) {
-            // If the current token is a substring of a higher-ranked token
+        for (let j = 0; j < scores.length; j++) {
+            if (i === j) continue;
+            // If i is a substring of j (e.g. "machine" in "machine learning")
             if (scores[j].token.includes(scores[i].token)) {
-                scores[i].score *= 0.3; // Heavy penalty for redundancy
+                occurrences.set(scores[i].token, (occurrences.get(scores[i].token) || 0) + 1);
+            }
+        }
+    }
+
+    for (let i = 0; i < scores.length; i++) {
+        const token = scores[i].token;
+        const supersetCount = occurrences.get(token) || 0;
+
+        if (supersetCount >= 2) {
+            // It's a common root (Cluster Hub) - Boost it
+            scores[i].score *= 1.5;
+        } else if (supersetCount === 1) {
+            // It's redundant with just one other thing - Penalize it (clean up)
+            scores[i].score *= 0.3;
+        } else {
+            // Check if this token IS a superset of a Cluster Hub
+            // If so, slightly penalize to reduce flooding
+            for (const [root, count] of occurrences) {
+                if (count >= 2 && token.includes(root)) {
+                    scores[i].score *= 0.8; // Slight dampening for n-grams if root is boosted
+                }
             }
         }
     }
