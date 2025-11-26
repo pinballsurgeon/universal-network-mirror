@@ -443,7 +443,7 @@ class Planet {
                     ctx.stroke();
                     
                     // Distribute angles but add some randomness/jitter based on index to prevent stacking
-                    angle += (Math.PI * 2) / sortedTokens.length;
+                    angle += (Math.PI * 2) / scoredTokens.length;
                 }
             }
         }
