@@ -105,7 +105,23 @@ function getScoredTokens(localMap, localTotal, limit = 20) {
         const score = tf / gf;
         scores.push({ token, score, count });
     }
-    // Sort by uniqueness (score) desc
+    // Sort by initial uniqueness (score) desc
+    scores.sort((a, b) => b.score - a.score);
+
+    // Redundancy Penalty: Reduce score if token is a substring of a higher-scored token
+    // This favors "machine learning" over just "learning" if both are present
+    for (let i = 0; i < scores.length; i++) {
+        if (scores[i].score <= 0) continue;
+        
+        for (let j = 0; j < i; j++) {
+            // If the current token is a substring of a higher-ranked token
+            if (scores[j].token.includes(scores[i].token)) {
+                scores[i].score *= 0.3; // Heavy penalty for redundancy
+            }
+        }
+    }
+
+    // Re-sort after penalties and slice
     return scores.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
@@ -427,8 +443,9 @@ class Planet {
                     const tx = this.x + Math.cos(currentAngle) * r;
                     const ty = this.y + Math.sin(currentAngle) * r;
                     
-                    // 3. Size: More frequent = Larger
-                    const fontSize = 8 + Math.floor(ratio * 14); // 8px to 22px
+                    // 3. Size: More frequent = Larger (Non-linear scale for emphasis)
+                    // Range: 6px to 28px, emphasizing the top words more
+                    const fontSize = 6 + Math.floor(Math.pow(ratio, 1.5) * 22);
                     
                     ctx.fillStyle = '#00ffcc';
                     ctx.font = `${fontSize}px monospace`;
@@ -442,7 +459,7 @@ class Planet {
                     ctx.lineTo(tx, ty);
                     ctx.stroke();
                     
-                    // Distribute angles but add some randomness/jitter based on index to prevent stacking
+                    // Distribute angles based on index
                     angle += (Math.PI * 2) / scoredTokens.length;
                 }
             }
