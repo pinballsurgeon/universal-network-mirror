@@ -197,6 +197,7 @@ class Moon {
         this.externalTraffic = 0;
         this.externalTrafficSize = 0;
         this.tokens = new Map();
+        this.tokenState = new Map(); // Stores visual state for smooth transitions
         this.tokenTotal = 0;
         this.samples = [];
         
@@ -450,17 +451,35 @@ class Planet {
                 const maxScore = scoredTokens[0].score;
                 
                 for (const {token, score, count} of scoredTokens) {
-                    // Relative ratio based on TF-IDF Score (Unique Importance)
-                    const ratio = score / maxScore;
+                    // Calculate Target Ratio
+                    const targetRatio = score / maxScore;
                     
+                    // Get/Init Visual State
+                    if (!this.tokenState.has(token)) {
+                        this.tokenState.set(token, { 
+                            displayRatio: 0, 
+                            phase: Math.random() * Math.PI * 2 
+                        });
+                    }
+                    const state = this.tokenState.get(token);
+                    
+                    // Smooth Lerp (Rolling Growth/Shrink)
+                    state.displayRatio = state.displayRatio * 0.95 + targetRatio * 0.05;
+                    
+                    const ratio = state.displayRatio;
+                    
+                    // Natural Randomness (Breathing Effect)
+                    const breathe = Math.sin(Date.now() * 0.002 + state.phase) * 0.05;
+                    const noisyRatio = Math.max(0, Math.min(1, ratio + breathe));
+
                     // 1. Radius: More important = Closer (Lower)
                     // Increased spread to 120px to reduce crowding
                     // Range: Planet Radius + 25px to + 145px
-                    const r = this.radius + 25 + (1 - ratio) * 120;
+                    const r = this.radius + 25 + (1 - noisyRatio) * 120;
                     
                     // 2. Speed: More frequent = Slower
                     // Inverse relationship
-                    const orbitSpeed = (0.0005 + (1 - ratio) * 0.002) * 0.25;
+                    const orbitSpeed = (0.0005 + (1 - noisyRatio) * 0.002) * 0.25;
                     const currentAngle = angle + (Date.now() * orbitSpeed);
 
                     const tx = this.x + Math.cos(currentAngle) * r;
@@ -468,15 +487,18 @@ class Planet {
                     
                     // 3. Size: More frequent = Larger (High Variance)
                     // Range: 8px to 36px, stronger power curve for dramatic difference
-                    const fontSize = 8 + Math.floor(Math.pow(ratio, 2.0) * 28);
+                    const fontSize = 8 + Math.floor(Math.pow(noisyRatio, 2.0) * 28);
                     
-                    ctx.fillStyle = '#00ffcc';
+                    // Fade in/out based on ratio (Smooth entry/exit)
+                    const alpha = Math.min(1, ratio * 2); // Fades out when ratio < 0.5
+                    
+                    ctx.fillStyle = `rgba(0, 255, 204, ${alpha})`;
                     ctx.font = `${fontSize}px monospace`;
                     ctx.fillText(token, tx, ty);
                     
                     // Draw connection line shooting out
                     // Fade line for smaller/distant words
-                    ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + ratio * 0.4})`;
+                    ctx.strokeStyle = `rgba(0, 255, 204, ${alpha * (0.1 + ratio * 0.4)})`;
                     ctx.beginPath();
                     ctx.moveTo(this.x, this.y);
                     ctx.lineTo(tx, ty);
@@ -484,6 +506,13 @@ class Planet {
                     
                     // Distribute angles based on index
                     angle += (Math.PI * 2) / scoredTokens.length;
+                }
+                
+                // Cleanup old token states
+                if (this.tokenState.size > 50) {
+                    for (const [t, s] of this.tokenState) {
+                        if (!this.tokens.has(t)) this.tokenState.delete(t);
+                    }
                 }
             }
         }
