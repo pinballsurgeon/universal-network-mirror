@@ -402,29 +402,44 @@ class Planet {
             let angle = 0;
             // Show top 20 tokens instead of 5
             const sortedTokens = [...this.tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
-            for (const [token, count] of sortedTokens) {
-                // Scale distance by count slightly to layer them
-                const r = this.radius + 15 + (Math.sqrt(count) * 5); 
+            
+            if (sortedTokens.length > 0) {
+                const maxCount = sortedTokens[0][1];
                 
-                // Orbit the word around the planet (add this.angle for rotation)
-                const orbitSpeed = 0.005 * (sortedTokens.length - sortedTokens.indexOf([token, count])); 
-                const currentAngle = angle + (Date.now() * orbitSpeed * 0.05);
+                for (const [token, count] of sortedTokens) {
+                    // Relative ratio (0.0 to 1.0)
+                    const ratio = count / maxCount;
+                    
+                    // 1. Radius: More frequent = Closer (Lower)
+                    // Range: Planet Radius + 15px to + 85px
+                    const r = this.radius + 15 + (1 - ratio) * 70;
+                    
+                    // 2. Speed: More frequent = Slower
+                    // Inverse relationship
+                    const orbitSpeed = 0.0005 + (1 - ratio) * 0.002;
+                    const currentAngle = angle + (Date.now() * orbitSpeed);
 
-                const tx = this.x + Math.cos(currentAngle) * r;
-                const ty = this.y + Math.sin(currentAngle) * r;
-                
-                ctx.fillStyle = '#00ffcc';
-                ctx.font = '10px monospace';
-                ctx.fillText(token, tx, ty);
-                
-                // Draw connection line shooting out
-                ctx.strokeStyle = 'rgba(0, 255, 204, 0.3)';
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                ctx.lineTo(tx, ty);
-                ctx.stroke();
-                
-                angle += (Math.PI * 2) / sortedTokens.length;
+                    const tx = this.x + Math.cos(currentAngle) * r;
+                    const ty = this.y + Math.sin(currentAngle) * r;
+                    
+                    // 3. Size: More frequent = Larger
+                    const fontSize = 8 + Math.floor(ratio * 14); // 8px to 22px
+                    
+                    ctx.fillStyle = '#00ffcc';
+                    ctx.font = `${fontSize}px monospace`;
+                    ctx.fillText(token, tx, ty);
+                    
+                    // Draw connection line shooting out
+                    // Fade line for smaller/distant words
+                    ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + ratio * 0.4})`;
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(tx, ty);
+                    ctx.stroke();
+                    
+                    // Distribute angles but add some randomness/jitter based on index to prevent stacking
+                    angle += (Math.PI * 2) / sortedTokens.length;
+                }
             }
         }
     }
