@@ -8,6 +8,8 @@ const timeEl = document.getElementById('time-offset');
 // UI Elements
 const btnPause = document.getElementById('btn-pause');
 const btnLive = document.getElementById('btn-live');
+const btnModeTraffic = document.getElementById('btn-mode-traffic');
+const btnModeLinguistic = document.getElementById('btn-mode-linguistic');
 const inspector = document.getElementById('inspector');
 const inspectorBody = document.getElementById('inspector-body');
 const btnMinimize = document.getElementById('btn-minimize');
@@ -54,6 +56,7 @@ let historyEndTime = Date.now();
 let playbackTime = Date.now();
 let isLive = true;
 let isPaused = false;
+let viewMode = 'TRAFFIC'; // 'TRAFFIC' or 'LINGUISTIC'
 let timeWindowSize = 1000 * 60; 
 
 // Load Domain Map
@@ -327,9 +330,60 @@ class Planet {
         decayStats(this);
         if (isPaused) return true;
 
-        this.angle += this.speed;
-        this.x = SUN_X() + Math.cos(this.angle) * this.distance;
-        this.y = SUN_Y() + Math.sin(this.angle) * this.distance;
+        if (viewMode === 'TRAFFIC') {
+            this.angle += this.speed;
+            this.x = SUN_X() + Math.cos(this.angle) * this.distance;
+            this.y = SUN_Y() + Math.sin(this.angle) * this.distance;
+        } else {
+            // Linguistic Mode: Semantic Gravity
+            // 1. Weak pull towards center to keep them on screen
+            const dx = SUN_X() - this.x;
+            const dy = SUN_Y() - this.y;
+            this.x += dx * 0.001;
+            this.y += dy * 0.001;
+
+            // 2. Semantic Attraction
+            for (const other of planets.values()) {
+                if (other === this) continue;
+                
+                // Weighted Jaccard Similarity
+                let intersection = 0;
+                let union = 0;
+                for (const [token, count] of this.tokens) {
+                    const otherCount = other.tokens.get(token) || 0;
+                    intersection += Math.min(count, otherCount);
+                    union += Math.max(count, otherCount);
+                }
+                for (const [token, count] of other.tokens) {
+                    if (!this.tokens.has(token)) union += count;
+                }
+
+                const similarity = union > 0 ? intersection / union : 0;
+                
+                if (similarity > 0.05) {
+                    const pdx = other.x - this.x;
+                    const pdy = other.y - this.y;
+                    const dist = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
+                    const force = similarity * 0.05; // Attraction strength
+                    
+                    if (dist > 100) { // Don't collapse completely
+                        this.x += (pdx / dist) * force;
+                        this.y += (pdy / dist) * force;
+                    }
+                }
+                
+                // Repulsion to prevent overlap
+                const pdx = this.x - other.x;
+                const pdy = this.y - other.y;
+                const dist = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
+                const minDist = this.radius + other.radius + 20;
+                if (dist < minDist) {
+                    const force = (minDist - dist) * 0.05;
+                    this.x += (pdx / dist) * force;
+                    this.y += (pdy / dist) * force;
+                }
+            }
+        }
 
         if (this.mass > 0) {
             this.mass *= 0.999;
@@ -389,8 +443,32 @@ class Planet {
             ctx.fillText(this.name, this.x, this.y + this.radius + 15);
         }
 
-        for (const moon of this.moons.values()) {
-            moon.draw(ctx);
+        if (viewMode === 'TRAFFIC') {
+            for (const moon of this.moons.values()) {
+                moon.draw(ctx);
+            }
+        } else {
+            // Linguistic Mode: Draw Word Moons
+            let angle = 0;
+            const sortedTokens = [...this.tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+            for (const [token, count] of sortedTokens) {
+                const r = this.radius + 15 + (count * 2);
+                const tx = this.x + Math.cos(angle + this.angle) * r;
+                const ty = this.y + Math.sin(angle + this.angle) * r;
+                
+                ctx.fillStyle = '#00ffcc';
+                ctx.font = '8px monospace';
+                ctx.fillText(token, tx, ty);
+                
+                // Draw connection
+                ctx.strokeStyle = 'rgba(0, 255, 204, 0.2)';
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
+                
+                angle += (Math.PI * 2) / sortedTokens.length;
+            }
         }
     }
 }
@@ -496,9 +574,22 @@ function toggleMinimize() {
     }
 }
 
+function setMode(mode) {
+    viewMode = mode;
+    if (mode === 'TRAFFIC') {
+        btnModeTraffic.classList.add('active');
+        btnModeLinguistic.classList.remove('active');
+    } else {
+        btnModeTraffic.classList.remove('active');
+        btnModeLinguistic.classList.add('active');
+    }
+}
+
 btnPause.addEventListener('click', togglePause);
 btnLive.addEventListener('click', goLive);
 btnMinimize.addEventListener('click', toggleMinimize);
+btnModeTraffic.addEventListener('click', () => setMode('TRAFFIC'));
+btnModeLinguistic.addEventListener('click', () => setMode('LINGUISTIC'));
 
 canvas.addEventListener('click', (e) => {
     const mx = e.clientX;
