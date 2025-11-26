@@ -416,7 +416,7 @@ class Planet {
                     
                     // 2. Speed: More frequent = Slower
                     // Inverse relationship
-                    const orbitSpeed = 0.0005 + (1 - ratio) * 0.002;
+                    const orbitSpeed = (0.0005 + (1 - ratio) * 0.002) * 0.25;
                     const currentAngle = angle + (Date.now() * orbitSpeed);
 
                     const tx = this.x + Math.cos(currentAngle) * r;

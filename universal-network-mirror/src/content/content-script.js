@@ -29,14 +29,28 @@ function captureContent() {
             .filter(w => w.length > 3); // Skip short words
             
         const tokenMap = {};
+        
+        // Unigrams (1x)
         words.forEach(w => {
             tokenMap[w] = (tokenMap[w] || 0) + 1;
         });
+
+        // Bigrams (2x)
+        for(let i=0; i < words.length - 1; i++) {
+            const bigram = words[i] + " " + words[i+1];
+            tokenMap[bigram] = (tokenMap[bigram] || 0) + 2;
+        }
+
+        // Trigrams (3x)
+        for(let i=0; i < words.length - 2; i++) {
+            const trigram = words[i] + " " + words[i+1] + " " + words[i+2];
+            tokenMap[trigram] = (tokenMap[trigram] || 0) + 3;
+        }
         
-        // Sort and take top 50 to save bandwidth
+        // Sort and take top 100 to save bandwidth
         const sortedTokens = Object.entries(tokenMap)
             .sort((a, b) => b[1] - a[1])
-            .slice(0, 50);
+            .slice(0, 100);
             
         try {
             chrome.runtime.sendMessage({
