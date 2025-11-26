@@ -95,7 +95,7 @@ function mergeTokens(targetMap, sourceTokens) {
     }
 }
 
-function getTopTokens(localMap, localTotal) {
+function getScoredTokens(localMap, localTotal, limit = 20) {
     // Calculate TF-IDF Score
     // Score = (LocalFreq) / (GlobalFreq + epsilon)
     const scores = [];
@@ -105,8 +105,12 @@ function getTopTokens(localMap, localTotal) {
         const score = tf / gf;
         scores.push({ token, score, count });
     }
-    // Sort by uniqueness (score) then count
-    return scores.sort((a, b) => b.score - a.score).slice(0, 10);
+    // Sort by uniqueness (score) desc
+    return scores.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+function getTopTokens(localMap, localTotal) {
+    return getScoredTokens(localMap, localTotal, 10);
 }
 
 function decayStats(entity) {
@@ -400,17 +404,18 @@ class Planet {
         } else {
             // Linguistic Mode: Draw Word Moons
             let angle = 0;
-            // Show top 20 tokens instead of 5
-            const sortedTokens = [...this.tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
             
-            if (sortedTokens.length > 0) {
-                const maxCount = sortedTokens[0][1];
+            // Use TF-IDF Scored Tokens instead of raw frequency
+            const scoredTokens = getScoredTokens(this.tokens, this.tokenTotal, 20);
+            
+            if (scoredTokens.length > 0) {
+                const maxScore = scoredTokens[0].score;
                 
-                for (const [token, count] of sortedTokens) {
-                    // Relative ratio (0.0 to 1.0)
-                    const ratio = count / maxCount;
+                for (const {token, score, count} of scoredTokens) {
+                    // Relative ratio based on TF-IDF Score (Unique Importance)
+                    const ratio = score / maxScore;
                     
-                    // 1. Radius: More frequent = Closer (Lower)
+                    // 1. Radius: More important = Closer (Lower)
                     // Range: Planet Radius + 15px to + 85px
                     const r = this.radius + 15 + (1 - ratio) * 70;
                     
