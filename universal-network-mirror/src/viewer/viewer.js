@@ -519,6 +519,7 @@ class Planet {
     }
 }
 
+// Particle System for Background Stars/Traffic
 class Particle {
     constructor(data) {
         this.data = data;
