@@ -455,6 +455,7 @@ class Planet {
                     const targetRatio = score / maxScore;
                     
                     // Get/Init Visual State
+                    if (!this.tokenState) this.tokenState = new Map();
                     if (!this.tokenState.has(token)) {
                         this.tokenState.set(token, { 
                             displayRatio: 0, 
