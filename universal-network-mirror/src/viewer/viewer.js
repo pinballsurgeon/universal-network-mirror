@@ -1,4 +1,6 @@
+
 import { FLAGS, MAX_PARTICLES, COAGULATION_THRESHOLD, ATTRACTION_FORCE } from '../common/constants.js';
+import { LinguisticAggregator } from './aggregator.js';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -13,6 +15,7 @@ const btnModeLinguistic = document.getElementById('btn-mode-linguistic');
 const inspector = document.getElementById('inspector');
 const inspectorBody = document.getElementById('inspector-body');
 const btnMinimize = document.getElementById('btn-minimize');
+const topTopicsStrip = document.getElementById('top-topics-strip');
 
 // Inspector Fields
 const inspName = document.getElementById('insp-name');
@@ -45,10 +48,11 @@ let particles = [];
 let buffer = [];
 let selectedObject = null;
 let isMinimized = false;
+let hoverTopic = null;   // Mouse over state
+let lockedTopic = null;  // Click lock state
 
-// Global Stats for TF-IDF
-let globalTokens = new Map(); 
-let globalTokenCount = 0;
+// Linguistic Aggregator (TF/IDF + hysteresis)
+const aggregator = new LinguisticAggregator();
 
 // Time State
 let historyStartTime = Date.now();
@@ -58,6 +62,7 @@ let isLive = true;
 let isPaused = false;
 let viewMode = 'TRAFFIC'; // 'TRAFFIC' or 'LINGUISTIC'
 let timeWindowSize = 1000 * 60; 
+let lastGlobalTopicUpdate = 0;
 
 // Load Domain Map
 function loadDomainMap() {
@@ -84,75 +89,9 @@ function formatBytes(bytes, decimals = 2) {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-function mergeTokens(targetMap, sourceTokens) {
-    if (!sourceTokens) return;
-    for (const [token, count] of Object.entries(sourceTokens)) {
-        targetMap.set(token, (targetMap.get(token) || 0) + count);
-        
-        // Update Global
-        globalTokens.set(token, (globalTokens.get(token) || 0) + count);
-        globalTokenCount += count;
-    }
-}
-
-function getScoredTokens(localMap, localTotal, limit = 20) {
-    // Calculate TF-IDF Score
-    // Score = (LocalFreq) / (GlobalFreq + epsilon)
-    const scores = [];
-    for (const [token, count] of localMap.entries()) {
-        const tf = count / (localTotal || 1);
-        const gf = (globalTokens.get(token) || 1) / (globalTokenCount || 1);
-        const score = tf / gf;
-        scores.push({ token, score, count });
-    }
-    // Sort by initial uniqueness (score) desc
-    scores.sort((a, b) => b.score - a.score);
-
-    // Cluster Analysis: Check for "Root Words" appearing in multiple N-grams
-    // If "machine" is in "machine learning" and "machine vision", boost "machine" and damp n-grams
-    const occurrences = new Map(); // word -> count of supersets
-    
-    for (let i = 0; i < scores.length; i++) {
-        for (let j = 0; j < scores.length; j++) {
-            if (i === j) continue;
-            // If i is a substring of j (e.g. "machine" in "machine learning")
-            if (scores[j].token.includes(scores[i].token)) {
-                occurrences.set(scores[i].token, (occurrences.get(scores[i].token) || 0) + 1);
-            }
-        }
-    }
-
-    for (let i = 0; i < scores.length; i++) {
-        const token = scores[i].token;
-        const supersetCount = occurrences.get(token) || 0;
-
-        if (supersetCount >= 2) {
-            // It's a common root (Cluster Hub) - Boost it
-            scores[i].score *= 1.5;
-        } else if (supersetCount === 1) {
-            // It's redundant with just one other thing - Penalize it (clean up)
-            scores[i].score *= 0.3;
-        } else {
-            // Check if this token IS a superset of a Cluster Hub
-            // If so, slightly penalize to reduce flooding
-            for (const [root, count] of occurrences) {
-                if (count >= 2 && token.includes(root)) {
-                    scores[i].score *= 0.8; // Slight dampening for n-grams if root is boosted
-                }
-            }
-        }
-    }
-
-    // Re-sort after penalties and slice
-    return scores.sort((a, b) => b.score - a.score).slice(0, limit);
-}
-
-function getTopTokens(localMap, localTotal) {
-    return getScoredTokens(localMap, localTotal, 10);
-}
-
 function decayStats(entity) {
-    const DECAY_RATE_TOKENS = 0.995;
+    // Slower decay for "long reach" aggregation (approx 30s half-life at 60fps)
+    const DECAY_RATE_TOKENS = 0.999;
     const DECAY_RATE_TRAFFIC = 0.999;
 
     // Decay Traffic
@@ -227,9 +166,8 @@ class Moon {
         if (particle.data.bloatScore) this.bloatScore += particle.data.bloatScore;
         
         if (particle.data.tokens) {
-            mergeTokens(this.tokens, particle.data.tokens);
-            // Approximate token total increase
-            this.tokenTotal += Object.values(particle.data.tokens).reduce((a, b) => a + b, 0);
+            const added = aggregator.mergeTokens(this.tokens, particle.data.tokens);
+            this.tokenTotal += added;
         }
         
         if (particle.data.sample) {
@@ -348,8 +286,8 @@ class Planet {
         }
 
         if (data.tokens) {
-            mergeTokens(this.tokens, data.tokens);
-            this.tokenTotal += Object.values(data.tokens).reduce((a, b) => a + b, 0);
+            const added = aggregator.mergeTokens(this.tokens, data.tokens);
+            this.tokenTotal += added;
         }
         
         if (data.sample) {
@@ -436,85 +374,124 @@ class Planet {
             ctx.fillText(this.name, this.x, this.y + this.radius + 15);
         }
 
+        // Global Topic Highlight Halo
+        const activeTopic = lockedTopic || hoverTopic;
+        if (activeTopic && this.tokens.has(activeTopic)) {
+            const strength = this.tokens.get(activeTopic);
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius + 10, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(0, 255, 204, 0.5)`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = '#00ffcc';
+            ctx.font = '10px monospace';
+            ctx.fillText(activeTopic, this.x, this.y - this.radius - 10);
+        }
+
         if (viewMode === 'TRAFFIC') {
             for (const moon of this.moons.values()) {
                 moon.draw(ctx);
             }
         } else {
             // Linguistic Mode: Draw Word Moons
-            let angle = 0;
+            if (!this.tokenState) this.tokenState = new Map();
             
-            // Use TF-IDF Scored Tokens instead of raw frequency
-            const scoredTokens = getScoredTokens(this.tokens, this.tokenTotal, 20);
-            
-            if (scoredTokens.length > 0) {
-                const maxScore = scoredTokens[0].score;
-                
-                for (const {token, score, count} of scoredTokens) {
-                    // Calculate Target Ratio
-                    const targetRatio = score / maxScore;
-                    
-                    // Get/Init Visual State
-                    if (!this.tokenState) this.tokenState = new Map();
+            // 1. Update Target Scores (Throttled to 1Hz and Respects Pause)
+            // We only calculate new rankings once per second to allow user to read.
+            // Also, we stop updating the list if the system is paused.
+            if (!isPaused && (playbackTime - (this.lastTokenUpdate || 0) > 1000)) {
+                this.lastTokenUpdate = playbackTime;
+
+                const targets = aggregator.getPlanetVisualTargets(
+                    this.domainId,
+                    this.tokens,
+                    this.tokenTotal,
+                    playbackTime
+                );
+                const activeTokens = new Set();
+
+                // Update targets for active tokens
+                targets.forEach(({ token, strength, rank }, index) => {
+                    activeTokens.add(token);
                     if (!this.tokenState.has(token)) {
+                        // Initialize new token
                         this.tokenState.set(token, { 
                             displayRatio: 0, 
-                            phase: Math.random() * Math.PI * 2 
+                            phase: Math.random() * Math.PI * 2,
+                            // Distribute initial angle based on index to avoid clumping
+                            angleOffset: (rank / Math.max(1, targets.length)) * Math.PI * 2
                         });
                     }
                     const state = this.tokenState.get(token);
-                    
-                    // Smooth Lerp (Rolling Growth/Shrink)
-                    state.displayRatio = state.displayRatio * 0.95 + targetRatio * 0.05;
-                    
-                    const ratio = state.displayRatio;
-                    
-                    // Natural Randomness (Breathing Effect)
-                    const breathe = Math.sin(Date.now() * 0.002 + state.phase) * 0.05;
-                    const noisyRatio = Math.max(0, Math.min(1, ratio + breathe));
+                    state.targetRatio = strength;
+                });
 
-                    // 1. Radius: More important = Closer (Lower)
-                    // Increased spread to 120px to reduce crowding
-                    // Range: Planet Radius + 25px to + 145px
-                    const r = this.radius + 25 + (1 - noisyRatio) * 120;
-                    
-                    // 2. Speed: More frequent = Slower
-                    // Inverse relationship
-                    const orbitSpeed = (0.0005 + (1 - noisyRatio) * 0.002) * 0.25;
-                    const currentAngle = angle + (Date.now() * orbitSpeed);
-
-                    const tx = this.x + Math.cos(currentAngle) * r;
-                    const ty = this.y + Math.sin(currentAngle) * r;
-                    
-                    // 3. Size: More frequent = Larger (High Variance)
-                    // Range: 8px to 36px, stronger power curve for dramatic difference
-                    const fontSize = 8 + Math.floor(Math.pow(noisyRatio, 2.0) * 28);
-                    
-                    // Fade in/out based on ratio (Smooth entry/exit)
-                    const alpha = Math.min(1, ratio * 2); // Fades out when ratio < 0.5
-                    
-                    ctx.fillStyle = `rgba(0, 255, 204, ${alpha})`;
-                    ctx.font = `${fontSize}px monospace`;
-                    ctx.fillText(token, tx, ty);
-                    
-                    // Draw connection line shooting out
-                    // Fade line for smaller/distant words
-                    ctx.strokeStyle = `rgba(0, 255, 204, ${alpha * (0.1 + ratio * 0.4)})`;
-                    ctx.beginPath();
-                    ctx.moveTo(this.x, this.y);
-                    ctx.lineTo(tx, ty);
-                    ctx.stroke();
-                    
-                    // Distribute angles based on index
-                    angle += (Math.PI * 2) / scoredTokens.length;
-                }
-                
-                // Cleanup old token states
-                if (this.tokenState.size > 50) {
-                    for (const [t, s] of this.tokenState) {
-                        if (!this.tokens.has(t)) this.tokenState.delete(t);
+                // Set target=0 for tokens that dropped out of top 20
+                for (const [token, state] of this.tokenState) {
+                    if (!activeTokens.has(token)) {
+                        state.targetRatio = 0;
                     }
                 }
+            }
+
+            // 2. Draw & Update Visual State
+            for (const [token, state] of this.tokenState) {
+                // Smooth Lerp (Rolling Growth/Shrink)
+                // We continue to Lerp even if paused, to finish the transition smoothly
+                state.displayRatio = state.displayRatio * 0.98 + (state.targetRatio || 0) * 0.02;
+                
+                // If it's effectively invisible and unwanted, remove it
+                if (state.displayRatio < 0.01 && state.targetRatio === 0) {
+                    this.tokenState.delete(token);
+                    continue;
+                }
+
+                const ratio = state.displayRatio;
+                
+                // Natural Randomness (Breathing Effect) - Slow breathing
+                // Use playbackTime instead of Date.now() so it pauses correctly!
+                const breathe = Math.sin(playbackTime * 0.0005 + state.phase) * 0.05;
+                const noisyRatio = Math.max(0, Math.min(1, ratio + breathe));
+
+                // 1. Radius: More important = Closer (Lower)
+                // Increased spread to 120px to reduce crowding
+                const r = this.radius + 25 + (1 - noisyRatio) * 120;
+                
+                // 2. Speed: Flattened curve so background words don't spin too fast
+                // Base speed reduced, max speed spread reduced
+                const orbitSpeed = (0.0002 + (1 - noisyRatio) * 0.0002) * 0.05;
+                const currentAngle = state.angleOffset + (playbackTime * orbitSpeed);
+
+                const tx = this.x + Math.cos(currentAngle) * r;
+                const ty = this.y + Math.sin(currentAngle) * r;
+                
+                // 3. Size: More frequent = Larger (High Variance)
+                const fontSize = 8 + Math.floor(Math.pow(noisyRatio, 2.0) * 28);
+                
+                // Fade in/out based on ratio (Smooth entry/exit)
+                // AGGRESSIVE FADE: Squared falloff to push background words to 50% or less opacity
+                // If ratio is 0.5 (medium importance), alpha becomes 0.25 * 3 = 0.75 (clamped to 1? No)
+                // Let's try: alpha = ratio. Pure linear. 
+                // Or even stronger: alpha = ratio * ratio. 
+                // User asked for "50% transparency of this background layer".
+                // Let's cap the max alpha for non-dominant words?
+                // Or just use a steep curve.
+                const alpha = Math.min(1, Math.pow(ratio, 1.5) * 1.5); 
+                // ratio=1 -> alpha=1.5 (clamped to 1)
+                // ratio=0.5 -> 0.35 * 1.5 = 0.52 (50% transparent)
+                // ratio=0.2 -> 0.09 * 1.5 = 0.13 (Very faint)
+                
+                ctx.fillStyle = `rgba(0, 255, 204, ${alpha})`;
+                ctx.font = `${fontSize}px monospace`;
+                ctx.fillText(token, tx, ty);
+                
+                // Draw connection line shooting out
+                ctx.strokeStyle = `rgba(0, 255, 204, ${alpha * (0.1 + ratio * 0.4)})`;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
             }
         }
     }
@@ -627,9 +604,16 @@ function setMode(mode) {
     if (mode === 'TRAFFIC') {
         btnModeTraffic.classList.add('active');
         btnModeLinguistic.classList.remove('active');
+        topTopicsStrip.style.opacity = '0';
+        setTimeout(() => { topTopicsStrip.style.display = 'none'; }, 500);
     } else {
         btnModeTraffic.classList.remove('active');
         btnModeLinguistic.classList.add('active');
+        topTopicsStrip.style.display = 'flex';
+        // Trigger reflow
+        void topTopicsStrip.offsetWidth;
+        topTopicsStrip.style.opacity = '1';
+        updateGlobalTopics(true);
     }
 }
 
@@ -697,6 +681,64 @@ function drawPieChart(ctx, internal, external) {
     ctx.fill();
 }
 
+function updateGlobalTopics(force = false) {
+    if (viewMode !== 'LINGUISTIC') return;
+    if (isPaused && !force) return;
+    
+    // Update every 1 second
+    if (!force && Date.now() - lastGlobalTopicUpdate < 1000) return;
+    lastGlobalTopicUpdate = Date.now();
+
+    const topTokens = aggregator.getGlobalTopTokens(6);
+    if (topTokens.length === 0) {
+        topTopicsStrip.innerHTML = '<span style="color:#444; font-size:11px; align-self:center;">WAITING FOR DATA...</span>';
+        return;
+    }
+
+    const maxCount = topTokens[0].count || 1;
+    
+    // Re-render only if needed or just replace innerHTML (simple for now)
+    // To avoid flicker/re-layout, we could diff, but for 6 items innerHTML is fine.
+    topTopicsStrip.innerHTML = topTokens.map(t => {
+        const percent = (t.count / maxCount) * 100;
+        const isLocked = (t.token === lockedTopic) ? 'locked' : '';
+        return `
+            <div class="topic-pill ${isLocked}" data-token="${t.token}">
+                ${t.token}
+                <div class="topic-bar"><div class="topic-bar-fill" style="width:${percent}%"></div></div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Delegate hover/click events for global topics
+topTopicsStrip.addEventListener('mouseover', (e) => {
+    const pill = e.target.closest('.topic-pill');
+    if (pill) {
+        hoverTopic = pill.dataset.token;
+    }
+});
+topTopicsStrip.addEventListener('mouseout', (e) => {
+    hoverTopic = null;
+});
+topTopicsStrip.addEventListener('click', (e) => {
+    const pill = e.target.closest('.topic-pill');
+    if (pill) {
+        const token = pill.dataset.token;
+        if (lockedTopic === token) {
+            lockedTopic = null;
+            pill.classList.remove('locked');
+        } else {
+            // Remove locked class from other pills
+            const existing = topTopicsStrip.querySelector('.topic-pill.locked');
+            if (existing) existing.classList.remove('locked');
+            
+            lockedTopic = token;
+            pill.classList.add('locked');
+        }
+    }
+});
+
 function updateHUD() {
     if (!selectedObject) return;
     
@@ -726,8 +768,8 @@ function updateHUD() {
     drawPieChart(pieCtxCount, selectedObject.internalTraffic, selectedObject.externalTraffic);
     drawPieChart(pieCtxSize, selectedObject.internalTrafficSize, selectedObject.externalTrafficSize);
     
-    // Top Tokens
-    const topTokens = getTopTokens(selectedObject.tokens, selectedObject.tokenTotal);
+    // Top Tokens (uses same scoring as visual layer, without hysteresis)
+    const topTokens = aggregator.getTopTokens(selectedObject.tokens, selectedObject.tokenTotal);
     inspTokens.innerHTML = topTokens.map(t => 
         `<div class="token-item"><span>${t.token}</span><span style="color:#00ffcc">${Math.floor(t.count)}</span></div>`
     ).join('');
@@ -786,6 +828,14 @@ canvas.addEventListener('mousedown', (e) => {
 
 function loop() {
     requestAnimationFrame(loop);
+
+    // Keep global linguistic stats in sync with the same
+    // rolling window behavior as per-entity decay.
+    if (!isPaused) {
+        aggregator.decayGlobalTokens();
+    }
+    
+    updateGlobalTopics();
 
     if (isLive && !isPaused) {
         playbackTime = Date.now() - 500;
