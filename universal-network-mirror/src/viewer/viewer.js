@@ -1,6 +1,7 @@
 import { FLAGS, MAX_PARTICLES } from '../common/constants.js';
 import { LinguisticAggregator } from './aggregator.js';
 import { Planet, Particle } from './engine/Entities.js';
+import { ProjectionCollector } from './projections/ProjectionCollector.js';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -31,6 +32,7 @@ const inspInternal = document.getElementById('insp-internal');
 const inspExternal = document.getElementById('insp-external');
 const inspTokens = document.getElementById('insp-tokens');
 const inspSample = document.getElementById('insp-sample');
+const inspFingerprint = document.getElementById('insp-fingerprint');
 const pieChartCount = document.getElementById('pie-chart-count');
 const pieCtxCount = pieChartCount.getContext('2d');
 const pieChartSize = document.getElementById('pie-chart-size');
@@ -55,6 +57,9 @@ let isMinimized = false;
 
 // Linguistic Aggregator (TF/IDF + hysteresis)
 const aggregator = new LinguisticAggregator();
+
+// Projection Collector (Metrics & Testing)
+const projectionCollector = new ProjectionCollector();
 
 // Time State
 let historyStartTime = Date.now();
@@ -345,6 +350,33 @@ function updateHUD() {
     } else {
         inspSample.innerText = "No content samples yet.";
     }
+
+    // Fingerprint Visualization
+    if (projectionCollector.lastTick && projectionCollector.lastTick.metrics.node_fingerprint) {
+        const fps = projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints;
+        const fp = fps.find(f => f.domainId === selectedObject.domainId);
+        
+        if (fp) {
+            const bars = [
+                { label: 'I/O BAL', val: fp.metrics.io_ratio, dev: 0 },
+                { label: 'DENSITY', val: fp.metrics.density, dev: fp.deviations.packet_dev },
+                { label: 'HEAVY', val: fp.metrics.heaviness, dev: fp.deviations.size_dev },
+                { label: 'COMPLEX', val: fp.metrics.complexity, dev: 0 }
+            ];
+            
+            inspFingerprint.innerHTML = bars.map(b => `
+                <div class="finger-row">
+                    <div class="finger-label">${b.label}</div>
+                    <div class="finger-bar-bg">
+                        <div class="finger-bar-fill ${Math.abs(b.dev) > 2 ? 'high-dev' : ''}" style="width:${Math.min(100, Math.max(5, b.val * 100))}%"></div>
+                    </div>
+                    <div class="finger-val">${(b.val * 100).toFixed(0)}</div>
+                </div>
+            `).join('');
+        } else {
+            inspFingerprint.innerHTML = '<div style="color:#666; font-size:10px; text-align:center;">Calculating...</div>';
+        }
+    }
 }
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -467,6 +499,20 @@ function loop() {
 
     statsEl.innerText = `FPS: 60 | P: ${particles.length} | PLANETS: ${planets.size}`;
     timeEl.innerText = isLive ? "LIVE (DELAYED)" : "REPLAY";
+
+    // --- METRICS & PROJECTION ---
+    // Collect stats for external validation (Cline / Tests)
+    const engineState = {
+        time: playbackTime,
+        planets,
+        particles,
+        viewMode,
+        selectedObject,
+        width,
+        height,
+        aggregator
+    };
+    projectionCollector.collectAndBroadcast(engineState);
 }
 
 loop();

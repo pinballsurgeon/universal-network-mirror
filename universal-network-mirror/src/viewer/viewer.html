@@ -63,6 +63,14 @@
         }
         .btn:hover { background: #00ffcc; color: #000; }
         .btn.active { background: #00ffcc; color: #000; box-shadow: 0 0 10px #00ffcc; }
+
+        /* Fingerprint Bars */
+        .finger-row { display: flex; align-items: center; margin: 3px 0; font-size: 10px; }
+        .finger-label { width: 70px; color: #888; }
+        .finger-bar-bg { flex-grow: 1; background: #112233; height: 6px; position: relative; border-radius: 2px; overflow:hidden;}
+        .finger-bar-fill { height: 100%; background: #00ffcc; transition: width 0.3s; }
+        .finger-bar-fill.high-dev { background: #ff4444; } /* Red for high deviation */
+        .finger-val { width: 30px; text-align: right; color: #fff; margin-left: 5px; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -100,6 +108,11 @@
             <div class="stat-row"><span>BLOAT SCORE</span><span class="stat-value" id="insp-bloat">0</span></div>
             <div class="stat-row"><span>RATING</span><span class="stat-value" id="insp-grade">A</span></div>
             
+            <div class="section-title">FINGERPRINT SIGNATURE</div>
+            <div id="insp-fingerprint">
+                <!-- Bars injected by JS -->
+            </div>
+
             <div class="section-title">PACKET STATS SAMPLING</div>
             <div style="display: flex; justify-content: space-around; margin: 10px 0;">
                 <div style="text-align:center">
