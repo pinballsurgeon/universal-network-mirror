@@ -115,6 +115,7 @@ function ingestPacket(url, method, type, size, time, content = '', meta = {}, in
         bloatScore: meta.bloatScore || 0,
         tokens: meta.tokens, // Pass tokens through
         sample: meta.sample, // Pass sample through
+        devSignals: meta.devSignals, // Pass developer signals
         isClean: meta.isClean !== undefined ? meta.isClean : true,
         isSubdomain: finalIsSubdomain,
         text: meta.text // Pass full extracted text if available
@@ -199,6 +200,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         meta.tokens = message.tokens;
         meta.sample = message.sample;
         meta.text = message.text;
+        meta.devSignals = message.devSignals; // Pass developer signals
 
         ingestPacket(
             sender.tab ? sender.tab.url : 'unknown',

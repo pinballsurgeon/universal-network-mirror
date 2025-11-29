@@ -1,71 +1,26 @@
-import { FLAGS, MAX_PARTICLES } from '../common/constants.js';
+import { FLAGS } from '../common/constants.js';
 import { LinguisticAggregator } from './aggregator.js';
-import { Planet, Particle } from './engine/Entities.js';
 import { ProjectionCollector } from './projections/ProjectionCollector.js';
 import { HistoryManager } from './history/HistoryManager.js';
+import { PhysicsEngine } from './engine/PhysicsEngine.js';
+import { RenderEngine } from './engine/RenderEngine.js';
+import { UIManager } from './ui/UIManager.js';
+import { Planet } from './engine/Entities.js';
 
+// --- INITIALIZATION ---
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const statsEl = document.getElementById('stats');
-const timeEl = document.getElementById('time-offset');
-
-// UI Elements
-const btnPause = document.getElementById('btn-pause');
-const btnLive = document.getElementById('btn-live');
-const btnModeTraffic = document.getElementById('btn-mode-traffic');
-const btnModeLinguistic = document.getElementById('btn-mode-linguistic');
-const inspector = document.getElementById('inspector');
-const btnMinimize = document.getElementById('btn-minimize');
-
-// Topic Inspector Elements
-const topicInspector = document.getElementById('topic-inspector');
-const topicTitle = document.getElementById('topic-title');
-const topicList = document.getElementById('topic-list');
-const btnCloseTopic = document.getElementById('btn-close-topic');
-
-// Inspector Fields
-const inspName = document.getElementById('insp-name');
-const inspType = document.getElementById('insp-type');
-const inspMass = document.getElementById('insp-mass');
-const inspBloat = document.getElementById('insp-bloat');
-const inspGrade = document.getElementById('insp-grade');
-const inspInternal = document.getElementById('insp-internal');
-const inspExternal = document.getElementById('insp-external');
-const inspTokens = document.getElementById('insp-tokens');
-const inspSample = document.getElementById('insp-sample');
-const inspFingerprint = document.getElementById('insp-fingerprint');
-const pieChartCount = document.getElementById('pie-chart-count');
-const pieCtxCount = pieChartCount.getContext('2d');
-const pieChartSize = document.getElementById('pie-chart-size');
-const pieCtxSize = pieChartSize.getContext('2d');
-
-let width, height;
-function resize() {
-    width = canvas.width = window.innerWidth;
-    height = canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resize);
-resize();
+const historyManager = new HistoryManager();
+const renderEngine = new RenderEngine(canvas, historyManager);
+const physicsEngine = new PhysicsEngine(canvas.width, canvas.height);
+const uiManager = new UIManager();
+const aggregator = new LinguisticAggregator();
+const projectionCollector = new ProjectionCollector();
 
 // --- STATE ---
 let domainMap = new Map(); 
 let reverseDomainMap = new Map(); 
-let planets = new Map(); 
-let particles = [];
-let buffer = [];
 let selectedObject = null;
-let isMinimized = false;
 
-// Linguistic Aggregator (TF/IDF + hysteresis)
-const aggregator = new LinguisticAggregator();
-
-// Projection Collector (Metrics & Testing)
-const projectionCollector = new ProjectionCollector();
-
-// History Manager (Time Travel & Compression)
-const historyManager = new HistoryManager();
-
-// Time State
 let historyStartTime = Date.now();
 let historyEndTime = Date.now();
 let playbackTime = Date.now();
@@ -73,7 +28,16 @@ let isLive = true;
 let isPaused = false;
 let viewMode = 'TRAFFIC'; // 'TRAFFIC' or 'LINGUISTIC'
 
-// Load Domain Map
+function resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    renderEngine.resize(w, h);
+    physicsEngine.resize(w, h);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- DATA LOADING ---
 function loadDomainMap() {
     chrome.storage.local.get(['domainMap'], (result) => {
         if (result.domainMap) {
@@ -88,103 +52,70 @@ function loadDomainMap() {
 loadDomainMap();
 setInterval(loadDomainMap, 5000); 
 
-// --- ANALYTICS HELPERS ---
-function formatBytes(bytes, decimals = 2) {
-    if (!+bytes) return '0 B';
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-}
-
-// --- PHYSICS HELPERS ---
-const SUN_X = () => width / 2;
-const SUN_Y = () => height / 2;
-
-// --- UI CONTROLS ---
-function togglePause() {
-    isPaused = !isPaused;
-    isLive = false;
-    btnPause.innerText = isPaused ? "RESUME" : "PAUSE";
-    btnLive.classList.remove('active');
-}
-
-function goLive() {
-    isLive = true;
-    isPaused = false;
-    btnLive.classList.add('active');
-    btnPause.innerText = "PAUSE";
-    particles = []; 
-}
-
-function toggleMinimize() {
-    isMinimized = !isMinimized;
-    if (isMinimized) {
-        inspector.classList.add('minimized');
-        btnMinimize.innerText = '+';
-    } else {
-        inspector.classList.remove('minimized');
-        btnMinimize.innerText = '_';
-    }
-}
-
-function setMode(mode) {
-    viewMode = mode;
-    if (mode === 'TRAFFIC') {
-        btnModeTraffic.classList.add('active');
-        btnModeLinguistic.classList.remove('active');
-    } else {
-        btnModeTraffic.classList.remove('active');
-        btnModeLinguistic.classList.add('active');
-    }
-}
-
-btnPause.addEventListener('click', togglePause);
-btnLive.addEventListener('click', goLive);
-btnMinimize.addEventListener('click', toggleMinimize);
-btnModeTraffic.addEventListener('click', () => setMode('TRAFFIC'));
-btnModeLinguistic.addEventListener('click', () => setMode('LINGUISTIC'));
-btnCloseTopic.addEventListener('click', closeTopicInspector);
-
-// Handle expand/collapse of packet details via delegation
-topicList.addEventListener('click', (e) => {
-    const header = e.target.closest('.packet-header');
-    if (header) {
-        const item = header.parentElement;
-        item.classList.toggle('expanded');
+// --- MESSAGE HANDLING ---
+chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'NEW_PARTICLE') {
+        physicsEngine.addParticle(message.payload);
+        historyEndTime = Math.max(historyEndTime, message.payload.time);
+        if (isLive) playbackTime = historyEndTime - 500; 
     }
 });
 
+// Initial Buffer Load
+chrome.runtime.sendMessage({ type: 'QUERY_BUFFER' }, (response) => {
+    if (response && response.buffer) {
+        response.buffer.forEach(p => physicsEngine.addParticle(p));
+        if (response.buffer.length > 0) {
+            historyStartTime = response.buffer[0].time;
+            historyEndTime = response.buffer[response.buffer.length-1].time;
+        }
+    }
+});
+
+// --- UI BINDING ---
+uiManager.bindControls(
+    () => { // Toggle Pause
+        isPaused = !isPaused;
+        isLive = false;
+        uiManager.setPauseState(isPaused);
+    },
+    () => { // Go Live
+        isLive = true;
+        isPaused = false;
+        uiManager.setLiveState(true);
+        physicsEngine.particles = []; // Clear visual particles on jump
+    },
+    () => { viewMode = 'TRAFFIC'; uiManager.setMode('TRAFFIC'); }, // Traffic Mode
+    () => { viewMode = 'LINGUISTIC'; uiManager.setMode('LINGUISTIC'); } // Linguistic Mode
+);
+
+// --- INTERACTION ---
+// Click Handler (Still complex enough to keep here for now, or move to InputSystem later)
 canvas.addEventListener('click', (e) => {
     const mx = e.clientX;
     const my = e.clientY;
+    const { planets } = physicsEngine.getState();
     
     // 1. Check Topic Words (Linguistic Mode)
     if (viewMode === 'LINGUISTIC') {
-        // Iterate backwards through planets (top first)
         for (const p of planets.values()) {
             if (p.tokenState) {
                 for (const [token, state] of p.tokenState) {
                     if (state.currentStrength < 0.01) continue;
-                    
-                    // Simple Box Hit Test
                     const fontSize = 8 + Math.pow(state.currentStrength, 0.7) * 24;
-                    // Approximate text width (monospace ~0.6em width)
                     const width = token.length * fontSize * 0.6;
                     const height = fontSize;
-                    
-                    // Text is centered at state.angle, state.radius (fixed prop name)
                     const tx = p.x + Math.cos(state.angle) * state.radius;
                     const ty = p.y + Math.sin(state.angle) * state.radius;
-                    
-                    // Hit box centered on tx, ty
-                    // Generous padding to ensure easy clicking
                     const padding = 30; 
                     if (Math.abs(mx - tx) < width / 2 + padding && Math.abs(my - ty) < height / 2 + padding) {
                         console.log("Clicked topic:", token);
-                        openTopicInspector(token);
-                        return; // Stop after finding one word
+                        // We need access to the FULL buffer for topic inspection?
+                        // Or just what PhysicsEngine has?
+                        // PhysicsEngine keeps `particles` (active) and `buffer` (raw).
+                        // Let's pass the raw buffer from PhysicsEngine.
+                        uiManager.showTopicInspector(token, physicsEngine.buffer, domainMap, FLAGS);
+                        return; 
                     }
                 }
             }
@@ -213,305 +144,31 @@ canvas.addEventListener('click', (e) => {
     
     selectedObject = found;
     if (selectedObject) {
-        inspector.style.display = 'block';
-        isMinimized = false;
-        inspector.classList.remove('minimized');
-        updateHUD();
+        uiManager.showInspector(selectedObject);
+        uiManager.updateInspector(selectedObject, aggregator, projectionCollector.lastTick, historyManager);
     } else {
-        inspector.style.display = 'none';
+        uiManager.hideInspector();
     }
 });
 
-function openTopicInspector(topic) {
-    topicInspector.style.display = 'block';
-    topicTitle.innerText = topic;
-    topicList.innerHTML = ''; // Clear old
-
-    // Find relevant packets in buffer (reverse order for recent first)
-    // Buffer contains particles.
-    const relevant = [];
-    for (let i = buffer.length - 1; i >= 0; i--) {
-        const p = buffer[i];
-        if (p.tokens && p.tokens[topic]) {
-            relevant.push(p);
-            if (relevant.length >= 50) break; // Limit to 50 items
-        }
-    }
-
-    if (relevant.length === 0) {
-        topicList.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">No recent packets found for this topic.</div>';
-        return;
-    }
-
-    topicList.innerHTML = relevant.map(p => {
-        const date = new Date(p.time).toLocaleTimeString();
-        const domain = domainMap.get(p.domainId) || "Unknown";
-        const isReq = (p.flags & FLAGS.IS_REQUEST);
-        const type = isReq ? "REQ" : "RES";
-        
-        let displayContent = p.sample || (p.tokens ? `Matched: ${p.tokens[topic]}x` : "No sample");
-        
-        // Use full text if available to find context
-        if (p.text) {
-            const idx = p.text.toLowerCase().indexOf(topic.toLowerCase());
-            if (idx !== -1) {
-                const start = Math.max(0, idx - 100); // Context window
-                const end = Math.min(p.text.length, idx + topic.length + 100);
-                displayContent = (start > 0 ? "..." : "") + 
-                                 p.text.substring(start, end) + 
-                                 (end < p.text.length ? "..." : "");
-            } else {
-                displayContent = p.text.substring(0, 300) + "..."; 
-            }
-        }
-
-        // Highlight the topic word
-        const cleanSample = displayContent.replace(/</g, "<").replace(/>/g, ">");
-        const highlighted = cleanSample.replace(
-            new RegExp(`(${topic})`, 'gi'), 
-            '<strong style="color:#ffffff; background:rgba(0, 255, 204, 0.2); padding:0 2px; border-radius:2px;">$1</strong>'
-        );
-
-        return `
-            <div class="packet-item">
-                <div class="packet-header">
-                    <span class="packet-time">${date}</span>
-                    <span class="packet-domain">[${type}] ${domain}</span>
-                </div>
-                <div class="packet-body">${highlighted}</div>
-            </div>
-        `;
-    }).join('');
-}
-
-function closeTopicInspector() {
-    topicInspector.style.display = 'none';
-}
-
-function drawPieChart(ctx, internal, external) {
-    const total = internal + external;
-    ctx.clearRect(0, 0, 100, 100);
-    if (total === 0) return;
-    
-    const center = 50;
-    const radius = 40;
-    
-    // Internal Slice (Yellow)
-    const internalAngle = (internal / total) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.moveTo(center, 50);
-    ctx.arc(center, 50, radius, 0, internalAngle);
-    ctx.fillStyle = '#ffff00';
-    ctx.fill();
-    
-    // External Slice (Blue)
-    ctx.beginPath();
-    ctx.moveTo(center, 50);
-    ctx.arc(center, 50, radius, internalAngle, Math.PI * 2);
-    ctx.fillStyle = '#5555ff';
-    ctx.fill();
-}
-
-
-function updateHUD() {
-    if (!selectedObject) return;
-    
-    inspName.innerText = selectedObject.name || "UNKNOWN";
-    inspType.innerText = selectedObject instanceof Planet ? "PLANET (ROOT)" : (selectedObject.isJunk ? "JUNK MOON" : "MOON");
-    inspMass.innerText = Math.floor(selectedObject.mass);
-    inspBloat.innerText = Math.floor(selectedObject.bloatScore);
-    // inspTraffic removed as it is now redundant with detailed breakdown
-    
-    const score = selectedObject.bloatScore / (selectedObject.packetCount || 1);
-    let grade = 'A';
-    if (score > 10) grade = 'B';
-    if (score > 50) grade = 'C';
-    if (score > 100) grade = 'D';
-    if (score > 500) grade = 'F';
-    
-    inspGrade.innerText = grade;
-    inspGrade.className = 'stat-value ' + (grade === 'A' ? 'grade-A' : (grade === 'F' ? 'grade-F' : ''));
-    
-    // Traffic Source
-    const intSize = formatBytes(selectedObject.internalTrafficSize);
-    const extSize = formatBytes(selectedObject.externalTrafficSize);
-    
-    inspInternal.innerText = `${Math.floor(selectedObject.internalTraffic)} pkts / ${intSize}`;
-    inspExternal.innerText = `${Math.floor(selectedObject.externalTraffic)} pkts / ${extSize}`;
-    
-    drawPieChart(pieCtxCount, selectedObject.internalTraffic, selectedObject.externalTraffic);
-    drawPieChart(pieCtxSize, selectedObject.internalTrafficSize, selectedObject.externalTrafficSize);
-    
-    // Top Tokens (uses same scoring as visual layer, without hysteresis)
-    const topTokens = aggregator.getTopTokens(selectedObject.tokens, selectedObject.tokenTotal);
-    inspTokens.innerHTML = topTokens.map(t => 
-        `<div class="token-item"><span>${t.token}</span><span style="color:#00ffcc">${Math.floor(t.count)}</span></div>`
-    ).join('');
-    
-    // Sample
-    if (selectedObject.samples.length > 0) {
-        inspSample.innerText = '"' + selectedObject.samples[selectedObject.samples.length - 1] + '..."';
-    } else {
-        inspSample.innerText = "No content samples yet.";
-    }
-
-    // Fingerprint Visualization
-    if (projectionCollector.lastTick && projectionCollector.lastTick.metrics.node_fingerprint) {
-        const metricsData = projectionCollector.lastTick.metrics.node_fingerprint;
-        const fps = metricsData.fingerPrints;
-        const avg = metricsData.avgProfile;
-        const totalNodes = fps.length;
-        
-        const fp = fps.find(f => f.domainId === selectedObject.domainId);
-        const history = historyManager.getDomainHistory(selectedObject.name);
-        
-        if (fp) {
-            // Helper to calc "Avg of Others"
-            const getOtherAvg = (key, myVal) => {
-                if (totalNodes <= 1) return 0;
-                return ((avg[key] * totalNodes) - myVal) / (totalNodes - 1);
-            };
-
-            const keys = [
-                { k: 'io_pkt', label: 'IO PKT' },
-                { k: 'io_vol', label: 'IO VOL' },
-                { k: 'upload', label: 'UPLOAD' },
-                { k: 'downld', label: 'DOWNLD' },
-                { k: 'density', label: 'DENSITY' },
-                { k: 'heavy', label: 'HEAVY' },
-                { k: 'sprawl', label: 'SPRAWL' },
-                { k: 'lingo', label: 'LINGO' }
-            ];
-            
-            inspFingerprint.innerHTML = keys.map(obj => {
-                const myVal = fp.metrics[obj.k];
-                const otherAvg = getOtherAvg(obj.k, myVal);
-                const histVal = history ? history.metrics[obj.k] : 0;
-                const isMaxDev = (obj.k === fp.maxDevMetric);
-                
-                // Visual Layers:
-                // 1. Avg Other (Bg)
-                // 2. History (White Border Ghost)
-                // 3. Current (Foreground)
-                
-                const histBar = history ? 
-                    `<div style="position:absolute; top:0; left:0; height:100%; border:1px dashed rgba(255,255,255,0.6); width:${Math.min(100, histVal * 100)}%; z-index:2;"></div>` : '';
-
-                return `
-                <div class="finger-row">
-                    <div class="finger-label" style="${isMaxDev ? 'color:#ff4444; font-weight:bold;' : ''}">${obj.label}</div>
-                    <div class="finger-bar-bg" style="position:relative;">
-                        <div style="position:absolute; top:0; left:0; height:100%; background:rgba(0, 255, 204, 0.2); width:${Math.min(100, otherAvg * 100)}%; z-index:1;"></div>
-                        ${histBar}
-                        <div class="finger-bar-fill ${isMaxDev ? 'high-dev' : ''}" style="width:${Math.min(100, Math.max(1, myVal * 100))}%"></div>
-                    </div>
-                    <div class="finger-val">${(myVal * 100).toFixed(0)}</div>
-                </div>`;
-            }).join('');
-        } else {
-            inspFingerprint.innerHTML = '<div style="color:#666; font-size:10px; text-align:center;">Calculating...</div>';
-        }
-    }
-}
-
-chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === 'NEW_PARTICLE') {
-        buffer.push(message.payload);
-        historyEndTime = Math.max(historyEndTime, message.payload.time);
-        if (isLive) playbackTime = historyEndTime - 500; 
-    }
-});
-chrome.runtime.sendMessage({ type: 'QUERY_BUFFER' }, (response) => {
-    if (response && response.buffer) {
-        buffer = response.buffer;
-        if (buffer.length > 0) {
-            historyStartTime = buffer[0].time;
-            historyEndTime = buffer[buffer.length-1].time;
-        }
-    }
-});
-
-const TIMELINE_HEIGHT = 80;
-function drawTimeline() {
-    const y = height - TIMELINE_HEIGHT;
-    
-    // Background
-    ctx.fillStyle = 'rgba(10, 20, 30, 0.9)';
-    ctx.fillRect(0, y, width, TIMELINE_HEIGHT);
-    
-    const totalDuration = historyEndTime - historyStartTime;
-    if (totalDuration <= 0) return;
-
-    // --- ACTIVITY HEATMAP (Adobe Premiere Style) ---
-    // Use historyManager to get aggregated activity density
-    // We map the *entire* history buffer to the screen width
-    
-    const heatmap = historyManager.getActivityHeatmap(100); // 100 bins
-    const binWidth = width / heatmap.length;
-    
-    ctx.beginPath();
-    ctx.moveTo(0, height);
-    
-    heatmap.forEach((val, i) => {
-        const h = val * (TIMELINE_HEIGHT - 10);
-        const bx = i * binWidth;
-        const by = height - h;
-        
-        ctx.fillStyle = `hsl(${180 + val * 60}, 100%, 50%)`; // Cyan to Blue/Purple
-        ctx.fillRect(bx, by, binWidth - 1, h);
-    });
-
-    // Playhead
-    const playheadX = ((playbackTime - historyStartTime) / totalDuration) * width;
-    
-    // Scrubber Line
-    ctx.strokeStyle = isLive ? '#00ffcc' : '#ffff00';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, y);
-    ctx.lineTo(playheadX, height);
-    ctx.stroke();
-    
-    // Time Label
-    ctx.fillStyle = '#fff';
-    ctx.font = '10px monospace';
-    ctx.fillText(new Date(playbackTime).toLocaleTimeString(), playheadX + 5, y + 15);
-    
-    // Zoom/Range Indicators (Mockup for V2)
-    ctx.fillStyle = '#555';
-    ctx.fillText("ZOOM: 1x [Full History]", 10, y + 15);
-}
-
+// Timeline Scrub
 canvas.addEventListener('mousedown', (e) => {
-    if (e.clientY > height - TIMELINE_HEIGHT) {
+    if (e.clientY > canvas.height - 80) { // TIMELINE_HEIGHT
         const x = e.clientX;
         const totalDuration = historyEndTime - historyStartTime;
-        playbackTime = historyStartTime + (x / width) * totalDuration;
+        playbackTime = historyStartTime + (x / canvas.width) * totalDuration;
         isLive = false; 
         isPaused = false; 
-        btnLive.classList.remove('active');
-        particles = [];
+        uiManager.setLiveState(false);
+        physicsEngine.particles = [];
     }
 });
 
+// --- GAME LOOP ---
 function loop() {
     requestAnimationFrame(loop);
 
-    const sx = SUN_X();
-    const sy = SUN_Y();
-
-    // Context object to pass to entities
-    const context = {
-        isPaused,
-        sunX: sx,
-        sunY: sy,
-        planets,
-        domainMap,
-        aggregator
-    };
-
-    // Keep global linguistic stats in sync with the same
-    // rolling window behavior as per-entity decay.
+    // 1. Time & Data Processing
     if (!isPaused) {
         aggregator.decayGlobalTokens();
     }
@@ -523,85 +180,58 @@ function loop() {
         playbackTime += 16; 
     }
 
-    ctx.fillStyle = 'rgba(5, 5, 5, 0.2)'; 
-    ctx.fillRect(0, 0, width, height);
+    physicsEngine.processBuffer(playbackTime, isPaused);
 
-    if (!isPaused) {
-        const windowStart = playbackTime - 100;
-        const windowEnd = playbackTime;
-        for (const p of buffer) {
-            if (p.time >= windowStart && p.time <= windowEnd) {
-                if (Math.random() > 0.9) continue; 
-                if (particles.length < MAX_PARTICLES) {
-                    particles.push(new Particle(p, sx, sy, width, height));
-                }
-            }
-        }
-    }
+    // 2. Physics Update
+    const context = {
+        isPaused,
+        domainMap, // Map<id, name>
+        aggregator
+    };
+    physicsEngine.update(context);
 
-    for (const [id, planet] of planets.entries()) {
-        const alive = planet.update(context);
-        if (!alive) {
-            planets.delete(id); 
-        } else {
-            // Find Fingerprint for visualizer (Equalizer)
-            let fp = null;
-            if (projectionCollector.lastTick && projectionCollector.lastTick.metrics.node_fingerprint) {
-                // Optimization: Maybe map this instead of find() every frame? 
-                // For <50 planets, find() is negligible.
-                const fps = projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints;
-                fp = fps.find(f => f.domainId === id);
-            }
-            
-            planet.draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fp);
-        }
-    }
-
-    ctx.globalCompositeOperation = 'lighter';
-    for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
-        const alive = p.update(context);
-        if (!alive) {
-            particles.splice(i, 1);
-        } else {
-            p.draw(ctx);
-        }
-    }
-    ctx.globalCompositeOperation = 'source-over';
-
-    ctx.beginPath();
-    ctx.arc(sx, sy, 20, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
+    // 3. Render
+    renderEngine.clear();
+    const physicsState = physicsEngine.getState();
     
-    drawTimeline();
-    if (selectedObject && !isMinimized) updateHUD();
+    renderEngine.drawScene(
+        physicsState, 
+        selectedObject, 
+        viewMode, 
+        aggregator, 
+        playbackTime, 
+        isPaused, 
+        projectionCollector.lastTick
+    );
+    
+    renderEngine.drawTimeline(playbackTime, isLive, historyStartTime, historyEndTime);
 
-    statsEl.innerText = `FPS: 60 | P: ${particles.length} | PLANETS: ${planets.size}`;
-    timeEl.innerText = isLive ? "LIVE (DELAYED)" : "REPLAY";
+    // 4. UI Updates
+    if (selectedObject && !uiManager.isMinimized) {
+        uiManager.updateInspector(selectedObject, aggregator, projectionCollector.lastTick, historyManager);
+    }
+    uiManager.updateStats(60, physicsState.particles.length, physicsState.planets.size);
+    uiManager.updateTime(isLive);
 
-    // --- METRICS & PROJECTION ---
+    // 5. Metrics & Projection
     // Collect stats for external validation (Cline / Tests)
     const engineState = {
         time: playbackTime,
-        planets,
-        particles,
+        planets: physicsState.planets,
+        particles: physicsState.particles,
         viewMode,
         selectedObject,
-        width,
-        height,
+        width: canvas.width,
+        height: canvas.height,
         aggregator
     };
     projectionCollector.collectAndBroadcast(engineState);
     
-    // Save to History Tape (if we have a new tick)
+    // Save to History Tape
     if (projectionCollector.lastTick) {
-        // Simple dedup based on timestamp to avoid duplicate pushes per frame
         const lastRecorded = historyManager.tape.length > 0 ? historyManager.tape[historyManager.tape.length-1] : null;
         if (!lastRecorded || lastRecorded.ts !== projectionCollector.lastTick.ts) {
             historyManager.push(projectionCollector.lastTick);
-            
-            // Persist Fingerprints for Long-Term History
             if (projectionCollector.lastTick.metrics.node_fingerprint) {
                 historyManager.updateFingerprints(projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints);
             }

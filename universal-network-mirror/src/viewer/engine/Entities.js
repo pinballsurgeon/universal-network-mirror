@@ -69,6 +69,39 @@ function drawEqualizer(ctx, x, y, radius, fp) {
     });
 }
 
+export class Artifact {
+    constructor(signal, parent) {
+        this.type = signal.type; // UUID, WEIRD_VAR, DEV_KEYWORD
+        this.value = signal.value;
+        this.parent = parent;
+        this.angle = Math.random() * Math.PI * 2;
+        this.distance = parent.radius + 15 + Math.random() * 10;
+        this.speed = (Math.random() > 0.5 ? 1 : -1) * (0.01 + Math.random() * 0.02);
+        this.color = this.type === 'UUID' ? '#ff00ff' : (this.type === 'WEIRD_VAR' ? '#ffff00' : '#00ffff');
+        this.creationTime = Date.now();
+    }
+
+    update(ctx) {
+        if (ctx.isPaused) return true;
+        this.angle += this.speed;
+        this.x = this.parent.x + Math.cos(this.angle) * this.distance;
+        this.y = this.parent.y + Math.sin(this.angle) * this.distance;
+        return true;
+    }
+
+    draw(ctx) {
+        ctx.beginPath();
+        // Draw as a small triangle or diamond
+        const s = 3; 
+        ctx.moveTo(this.x, this.y - s);
+        ctx.lineTo(this.x + s, this.y + s);
+        ctx.lineTo(this.x - s, this.y + s);
+        ctx.closePath();
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
+}
+
 export class Moon {
     constructor(domainId, name, parent) {
         this.domainId = domainId;
@@ -197,6 +230,7 @@ export class Planet {
         this.bloatScore = 0;
         this.packetCount = 0;
         this.moons = new Map(); 
+        this.artifacts = []; // Developer Signals
         
         // Analytics
         this.internalTraffic = 0;
@@ -260,6 +294,15 @@ export class Planet {
 
         if (particle.data.bloatScore) this.bloatScore += particle.data.bloatScore;
         
+        // Spawn Artifacts from Dev Signals
+        if (particle.data.devSignals && particle.data.devSignals.length > 0) {
+            particle.data.devSignals.forEach(signal => {
+                if (this.artifacts.length < 50) { // Limit clutter
+                    this.artifacts.push(new Artifact(signal, this));
+                }
+            });
+        }
+
         this.lastActive = Date.now();
     }
 
@@ -286,6 +329,11 @@ export class Planet {
             } else {
                 totalMoonMass += moon.mass;
             }
+        }
+
+        // Update Artifacts
+        for (const art of this.artifacts) {
+            art.update(ctx);
         }
         
         const timeSinceActive = Date.now() - this.lastActive;
@@ -345,6 +393,9 @@ export class Planet {
         if (viewMode === 'TRAFFIC') {
             for (const moon of this.moons.values()) {
                 moon.draw(ctx, selectedObject);
+            }
+            for (const art of this.artifacts) {
+                art.draw(ctx);
             }
         } else {
             // --- NEW LINGUISTIC MODE: SEMANTIC ATMOSPHERE ---
@@ -460,6 +511,8 @@ export class Particle {
     update(ctx) {
         // ctx = { isPaused, planets, domainMap, sunX, sunY, aggregator }
         if (ctx.isPaused) return true;
+
+        // console.log(`Particle update: Domain ${this.data.rootDomainId}`);
 
         let planet = ctx.planets.get(this.data.rootDomainId);
         if (!planet && ctx.domainMap.has(this.data.rootDomainId)) {

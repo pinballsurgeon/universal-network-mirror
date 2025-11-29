@@ -1,0 +1,441 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// --- MOCKS ---
+const window = {
+    innerWidth: 1200,
+    innerHeight: 800,
+    postMessage: () => {}
+};
+global.window = window;
+
+// Mock Canvas Context for Entities.draw calls (even if we don't draw, we might need to support the call if code calls it)
+const mockCtx = {
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    arc: () => {},
+    fill: () => {},
+    stroke: () => {},
+    closePath: () => {},
+    fillText: () => {},
+    measureText: () => ({ width: 10 }),
+    font: '',
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+    textAlign: '',
+    textBaseline: '',
+    globalAlpha: 1,
+    lineCap: ''
+};
+
+// --- IMPORTS ---
+// We need to resolve paths relative to this file
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SRC_ROOT = path.resolve(__dirname, '../src');
+
+// Import Modules dynamically or rely on relative paths if standard
+import { LinguisticAggregator } from '../src/viewer/aggregator.js';
+import { ProjectionCollector } from '../src/viewer/projections/ProjectionCollector.js';
+import { PhysicsEngine } from '../src/viewer/engine/PhysicsEngine.js';
+import { FLAGS } from '../src/common/constants.js';
+
+// --- HEADLESS EXTENSION BACKEND ---
+// Mimics background.js state and logic
+class HeadlessExtension {
+    constructor() {
+        this.domainMap = new Map();
+        this.nextDomainId = 1;
+        this.buffer = []; // "Ring of Fire"
+    }
+
+    getDomainId(hostname) {
+        if (this.domainMap.has(hostname)) return this.domainMap.get(hostname);
+        const id = this.nextDomainId++;
+        this.domainMap.set(hostname, id);
+        return id;
+    }
+
+    parseDomainInfo(url) {
+        try {
+            const hostname = new URL(url).hostname;
+            const parts = hostname.split('.');
+            // Simple root domain logic
+            const rootDomain = parts.slice(-2).join('.'); 
+            return { hostname, rootDomain, isSubdomain: hostname !== rootDomain };
+        } catch (e) {
+            return { hostname: 'unknown', rootDomain: 'unknown', isSubdomain: false };
+        }
+    }
+
+    ingestPacket(url, method, type, size, time, content = '', meta = {}, initiator = null, isRequest = false) {
+        let { hostname, rootDomain, isSubdomain } = this.parseDomainInfo(url);
+        
+        // Simplified initiator logic
+        let finalRootDomain = rootDomain;
+        let finalIsSubdomain = isSubdomain;
+
+        const domainId = this.getDomainId(hostname);
+        const rootDomainId = this.getDomainId(finalRootDomain);
+        
+        let flags = 0;
+        if (isRequest) flags |= FLAGS.IS_REQUEST;
+        else flags |= FLAGS.IS_RESPONSE;
+        if (content) flags |= FLAGS.HAS_CONTENT;
+
+        const particle = {
+            time: time,
+            domainId: domainId,
+            rootDomainId: rootDomainId,
+            vectorId: 0, // Simplified
+            size: size,
+            flags: flags,
+            url: url,
+            bloatScore: meta.bloatScore || 0,
+            tokens: meta.tokens,
+            devSignals: meta.devSignals, // Pass dev signals
+            isClean: meta.isClean !== undefined ? meta.isClean : true,
+            isSubdomain: finalIsSubdomain
+        };
+
+        // Broadcast to "Viewer" (push to local buffer for the Engine)
+        return particle;
+    }
+}
+
+// --- HEADLESS VIEWER ENGINE ---
+class HeadlessViewer {
+    constructor(extension) {
+        this.extension = extension;
+        this.planets = new Map();
+        this.particles = [];
+        this.aggregator = new LinguisticAggregator();
+        this.projectionCollector = new ProjectionCollector();
+        this.width = window.innerWidth;
+        this.height = window.innerHeight;
+        this.sunX = this.width / 2;
+        this.sunY = this.height / 2;
+        this.playbackTime = Date.now();
+        
+        // Reverse map for Entity creation
+        this.reverseDomainMap = new Map(); // id -> name
+        
+        // Use the new Physics Engine
+        this.physics = new PhysicsEngine(this.width, this.height, { samplingRate: 1.0 });
+    }
+
+    updateDomainMap() {
+        // Sync map
+        for (const [name, id] of this.extension.domainMap.entries()) {
+            this.reverseDomainMap.set(id, name);
+        }
+    }
+
+    addParticle(particleData) {
+        this.updateDomainMap();
+        this.physics.addParticle(particleData);
+    }
+
+    tick() {
+        this.playbackTime += 16; // 60fps sim
+        
+        const context = {
+            isPaused: false,
+            sunX: this.sunX,
+            sunY: this.sunY,
+            planets: this.planets,
+            domainMap: this.reverseDomainMap, // Viewer expects Map<id, name>
+            aggregator: this.aggregator
+        };
+
+        // Update Planets
+        for (const [id, planet] of this.planets.entries()) {
+            const alive = planet.update(context);
+            if (!alive) this.planets.delete(id);
+        }
+
+        // Update Particles
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            const alive = p.update(context);
+            if (!alive) this.particles.splice(i, 1);
+        }
+
+        // Collect Metrics
+        const engineState = {
+            time: this.playbackTime,
+            planets: this.planets,
+            particles: this.particles,
+            viewMode: 'TRAFFIC',
+            selectedObject: null,
+            width: this.width,
+            height: this.height,
+            aggregator: this.aggregator
+        };
+        
+        // Force broadcast for test
+        this.projectionCollector.collectAndBroadcast(engineState, true);
+        
+        return this.projectionCollector.lastTick;
+    }
+}
+
+// --- TRAFFIC SIMULATOR (REAL DATA FETCHER) ---
+async function runGauntlet(label, urls) {
+    console.log(`\n=== RUNNING GAUNTLET: ${label} ===`);
+    const extension = new HeadlessExtension();
+    const viewer = new HeadlessViewer(extension);
+    
+    // 1. Fetch & Feed
+    console.log(`Fetching ${urls.length} sites...`);
+    
+    for (const url of urls) {
+        try {
+            console.log(`  GET ${url}`);
+            const startTime = Date.now();
+            const res = await fetch(url);
+            const text = await res.text();
+            const duration = Date.now() - startTime;
+            const size = text.length;
+            
+            // Feed Main Request
+            const p1 = extension.ingestPacket(url, 'GET', 'document', 500, startTime, '', {}, null, true);
+            viewer.addParticle(p1);
+            
+            const p2 = extension.ingestPacket(url, 'GET', 'document', size, startTime + duration, text, {}, null, false);
+            viewer.addParticle(p2);
+
+            // Simple Parse for Resources (img, script, link)
+            // This approximates the "cascade" of traffic
+            const resourceRegex = /<[a-z]+[^>]+(src|href)=["']([^"']+)["'][^>]*>/g;
+            let match;
+            let count = 0;
+            while ((match = resourceRegex.exec(text)) !== null) {
+                if (count++ > 50) break; // Limit per page
+                let resUrl = match[2];
+                if (resUrl.startsWith('//')) resUrl = 'https:' + resUrl;
+                if (resUrl.startsWith('/')) resUrl = new URL(url).origin + resUrl;
+                
+                if (!resUrl.startsWith('http')) continue;
+
+                // Simulate fetch of resource (mock latency/size)
+                const resStart = startTime + Math.random() * 2000;
+                const resSize = Math.floor(Math.random() * 50000);
+                
+                const rp1 = extension.ingestPacket(resUrl, 'GET', 'resource', 300, resStart, '', {}, url, true);
+                viewer.addParticle(rp1);
+                
+                // Response 50% of time (some fail/block)
+                if (Math.random() > 0.1) {
+                    const rp2 = extension.ingestPacket(resUrl, 'GET', 'resource', resSize, resStart + 100 + Math.random()*500, '', {}, url, false);
+                    viewer.addParticle(rp2);
+                }
+            }
+        } catch (e) {
+            console.log(`  Failed ${url}: ${e.message}`);
+        }
+    }
+
+    // 2. Run Physics Engine to Settle
+    console.log("Simulating physics (5 seconds)...");
+    let lastStats = null;
+    for (let i = 0; i < 300; i++) { // 300 frames @ 60fps = 5s
+        lastStats = viewer.tick();
+    }
+
+    // 3. Report
+    if (lastStats) {
+        console.log(`\nRESULTS [${label}]:`);
+        console.log(`  Particles Active: ${lastStats.particleCount}`);
+        
+        const density = lastStats.metrics.visual_density;
+        console.log(`  Visual Density:   ${density.densityScore.toFixed(4)} (Target: ${label === 'CLEAN' ? '< 0.1' : '> 0.2'})`);
+        
+        const bloatStats = lastStats.metrics.planet_bloat_grade; // Array of planet stats
+        let totalMass = 0;
+        let topPlanet = null;
+        if (bloatStats && bloatStats.length > 0) {
+            bloatStats.forEach(p => {
+                totalMass += p.mass;
+                if (!topPlanet || p.mass > topPlanet.mass) topPlanet = p;
+            });
+        }
+        
+        console.log(`  Total Mass:       ${totalMass.toFixed(0)}`);
+        console.log(`  Top Planet:       ${topPlanet ? topPlanet.name : 'None'}`);
+        
+        const fps = lastStats.metrics.node_fingerprint.fingerPrints;
+        console.log(`  Nodes Tracked:    ${fps.length}`);
+    }
+}
+
+// --- MAIN ---
+(async () => {
+    // Clean Sites
+    await runGauntlet('CLEAN', [
+        'https://www.wikipedia.org',
+        'https://news.google.com'
+    ]);
+
+    // Messy Sites
+    await runGauntlet('MESSY', [
+        'https://www.yahoo.com',
+        'https://www.reddit.com'
+    ]);
+
+    // Stress Test
+    await runStressTest(1000); // 1000 particles
+    await runStressTest(5000); // 5000 particles
+
+    // Consistency Check
+    await runConsistencyCheck('https://www.wikipedia.org', 3);
+
+    // Security Scan (Dev Signals)
+    await runSecurityScan();
+})();
+
+// --- SECURITY SCAN ---
+async function runSecurityScan() {
+    console.log(`\n=== RUNNING SECURITY SCAN: Developer Signals ===`);
+    const extension = new HeadlessExtension();
+    const viewer = new HeadlessViewer(extension);
+    const startTime = Date.now();
+
+    // Ingest packet with Dev Signals
+    const signals = [
+        { type: 'UUID', value: '12345678-1234-1234-1234-1234567890ab' },
+        { type: 'WEIRD_VAR', value: 'mmmmmlli' }
+    ];
+    
+    // Create particle directly to bypass fetch parsing
+    const p1 = extension.ingestPacket(
+        'https://api.dev-test.com/endpoint', 
+        'GET', 'json', 
+        1000, startTime, 
+        '', 
+        { devSignals: signals }, // Meta
+        null, 
+        true
+    );
+    viewer.addParticle(p1);
+
+    // Run Physics
+    console.log("  Simulating 500 frames...");
+    for (let i = 0; i < 500; i++) {
+        viewer.tick();
+        // Check mid-flight
+        if (i % 100 === 0) {
+             const state = viewer.physics.getState();
+             // console.log(`    Frame ${i}: ${state.particles.length} particles`);
+        }
+    }
+
+    // Inspect Planets
+    const state = viewer.physics.getState();
+    let artifactsFound = 0;
+    for (const planet of state.planets.values()) {
+        if (planet.artifacts && planet.artifacts.length > 0) {
+            console.log(`  Planet ${planet.name} has ${planet.artifacts.length} artifacts.`);
+            planet.artifacts.forEach(a => console.log(`    - [${a.type}] ${a.value}`));
+            artifactsFound += planet.artifacts.length;
+        }
+    }
+
+    if (artifactsFound === 2) console.log("  [PASS] Artifacts spawned correctly.");
+    else console.log(`  [FAIL] Expected 2 artifacts, found ${artifactsFound}.`);
+}
+
+// --- STRESS TESTING ---
+async function runStressTest(particleCount) {
+    console.log(`\n=== RUNNING STRESS TEST: ${particleCount} particles ===`);
+    const extension = new HeadlessExtension();
+    const viewer = new HeadlessViewer(extension);
+    
+    const startTime = Date.now();
+    
+    // Flood
+    for (let i = 0; i < particleCount; i++) {
+        const domain = `stress-${i % 50}.test.com`;
+        const p = extension.ingestPacket(
+            `https://${domain}/resource-${i}`, 
+            'GET', 'image', 
+            Math.random() * 1000, 
+            startTime + (i * 2), // Staggered slightly
+            '', 
+            { bloatScore: Math.random() * 100 }
+        );
+        viewer.addParticle(p);
+    }
+    
+    console.log(`  Ingested ${particleCount} particles.`);
+    
+    // Measure Simulation Performance
+    const simStart = performance.now();
+    let totalFrameTime = 0;
+    const FRAMES = 100;
+    
+    for (let i = 0; i < FRAMES; i++) {
+        const fStart = performance.now();
+        viewer.tick();
+        totalFrameTime += (performance.now() - fStart);
+    }
+    
+    const avgFrameTime = totalFrameTime / FRAMES;
+    const estimatedFPS = 1000 / avgFrameTime;
+    
+    console.log(`  Avg Frame Time: ${avgFrameTime.toFixed(2)}ms`);
+    console.log(`  Estimated FPS:  ${estimatedFPS.toFixed(0)}`);
+    
+    if (estimatedFPS < 30) console.log("  [WARNING] Slowness detected!");
+    else console.log("  [PASS] Performance within limits.");
+}
+
+// --- CONSISTENCY CHECK ---
+async function runConsistencyCheck(url, iterations) {
+    console.log(`\n=== RUNNING CONSISTENCY CHECK: ${url} (${iterations} runs) ===`);
+    
+    const results = [];
+    
+    for (let i = 0; i < iterations; i++) {
+        // We need a fresh extension/viewer per run to ensure isolation
+        const extension = new HeadlessExtension();
+        const viewer = new HeadlessViewer(extension);
+        
+        // Fetch (cached likely, but request logic runs)
+        try {
+            const res = await fetch(url);
+            const text = await res.text();
+            
+            // Ingest
+            const p1 = extension.ingestPacket(url, 'GET', 'document', 500, Date.now(), '', {}, null, true);
+            viewer.addParticle(p1);
+            
+            const p2 = extension.ingestPacket(url, 'GET', 'document', text.length, Date.now()+100, text, {}, null, false);
+            viewer.addParticle(p2);
+            
+            // Settle
+            for (let f = 0; f < 100; f++) viewer.tick();
+            
+            // Capture Metric
+            const tick = viewer.projectionCollector.lastTick;
+            const density = tick.metrics.visual_density.densityScore;
+            results.push(density);
+            console.log(`  Run ${i+1}: Density = ${density.toFixed(6)}`);
+        } catch (e) {
+            console.log(`  Run ${i+1}: Failed (${e.message})`);
+        }
+    }
+    
+    // Calc Variance
+    const mean = results.reduce((a,b) => a+b, 0) / results.length;
+    const variance = results.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / results.length;
+    const stdDev = Math.sqrt(variance);
+    
+    console.log(`  Mean Density: ${mean.toFixed(6)}`);
+    console.log(`  Std Deviation: ${stdDev.toFixed(8)}`);
+    
+    if (stdDev < 0.000001) console.log("  [PASS] High Consistency");
+    else console.log("  [WARN] Variance detected");
+}
