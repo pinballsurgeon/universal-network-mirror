@@ -116,7 +116,8 @@ function ingestPacket(url, method, type, size, time, content = '', meta = {}, in
         tokens: meta.tokens, // Pass tokens through
         sample: meta.sample, // Pass sample through
         isClean: meta.isClean !== undefined ? meta.isClean : true,
-        isSubdomain: finalIsSubdomain
+        isSubdomain: finalIsSubdomain,
+        text: meta.text // Pass full extracted text if available
     };
 
     ringBuffer.push(particle);
@@ -193,10 +194,11 @@ chrome.webRequest.onCompleted.addListener(
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === MSG_CAPTURE_PAYLOAD) {
-        // Extend meta with tokens/sample
+        // Extend meta with tokens/sample/text
         const meta = message.meta || {};
         meta.tokens = message.tokens;
         meta.sample = message.sample;
+        meta.text = message.text;
 
         ingestPacket(
             sender.tab ? sender.tab.url : 'unknown',

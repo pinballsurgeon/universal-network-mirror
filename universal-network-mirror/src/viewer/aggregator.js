@@ -3,16 +3,22 @@
 // topic scoring + light hysteresis so viewer.js can focus on
 // physics / drawing.
 
+const STOP_WORDS = new Set([
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can't", "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down", "during", "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't", "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself", "him", "himself", "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there", "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't", "what", "what's", "when", "when's", "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves",
+    "will", "just", "now", "one", "like", "can", "get", "time", "new", "us", "use", "make", "made", "see", "way", "day", "go", "come", "back", "many", "much", "good", "know", "think", "take", "people", "year", "say", "well", "work", "want", "also", "even",
+    "follow", "like", "subscribe", "full", "coverage", "text", "courier", "journal", "new", "journal", "report", "news", "times", "hour", "hours"
+]);
+
 export class LinguisticAggregator {
     constructor(options = {}) {
         const {
-            maxVisualTopicsPerPlanet = 10,
-            visualCandidateLimit = 30,
-            enterThreshold = 0.3,
-            exitThreshold = 0.12,
-            minEnterDurationMs = 2000,
+            maxVisualTopicsPerPlanet = 30,
+            visualCandidateLimit = 60,
+            enterThreshold = 0.01,
+            exitThreshold = 0.005,
+            minEnterDurationMs = 0,
             maxIdleMs = 60000,
-            globalDecayRate = 0.999,
+            globalDecayRate = 0.992, // Faster decay to match viewer (1.5s half-life)
         } = options;
 
         this.maxVisualTopicsPerPlanet = maxVisualTopicsPerPlanet;
@@ -38,6 +44,9 @@ export class LinguisticAggregator {
         if (!sourceTokens) return 0;
         let added = 0;
         for (const [token, count] of Object.entries(sourceTokens)) {
+            // Apply massive stop word list filtering immediately
+            if (STOP_WORDS.has(token.toLowerCase()) || token.length < 3) continue;
+
             const c = count || 0;
             if (!c) continue;
 
@@ -86,39 +95,48 @@ export class LinguisticAggregator {
 
         scores.sort((a, b) => b.score - a.score);
 
-        // Cluster / hub logic: penalize overly generic roots that appear
-        // inside multiple n-grams, and slightly boost specific n-grams.
-        const occurrences = new Map(); // token -> count of supersets
-        for (let i = 0; i < scores.length; i++) {
-            for (let j = 0; j < scores.length; j++) {
-                if (i === j) continue;
-                const ti = scores[i].token;
-                const tj = scores[j].token;
-                if (tj.includes(ti)) {
-                    occurrences.set(ti, (occurrences.get(ti) || 0) + 1);
+        // 1. Cluster / hub logic: REMOVED penalty for generic roots. 
+        // User wants frequent constituents ("learning") to be the LARGEST topics ("boss"),
+        // while the n-grams ("machine learning") are smaller.
+        // We still track occurrences to potentially boost the root further later.
+
+        // 2. "Top Level Heuristics": Constituent Boosting
+        // "Words that show up as members of ngrams are weighted high based on frequency of showing up in the top ngrams"
+        const topCandidates = scores.slice(0, 40); // Look at top 40 for constituent analysis
+        const constituentFreq = new Map();
+        
+        // Count unigram frequencies within the top n-grams
+        for (const cand of topCandidates) {
+            // Split phrase into words
+            const parts = cand.token.split(/[\s-_]+/);
+            if (parts.length > 1) {
+                for (const p of parts) {
+                    const cleanP = p.toLowerCase();
+                    if (!STOP_WORDS.has(cleanP) && cleanP.length > 2) {
+                        constituentFreq.set(cleanP, (constituentFreq.get(cleanP) || 0) + 1);
+                    }
                 }
             }
         }
 
+        // Boost unigrams that appear frequently in top phrases
         for (let i = 0; i < scores.length; i++) {
-            const token = scores[i].token;
-            const supersetCount = occurrences.get(token) || 0;
-
-            if (supersetCount >= 2) {
-                // Generic hub word present in many n-grams: damp it.
-                scores[i].score *= 0.5;
-            } else if (supersetCount === 1) {
-                // Appears inside a single bigger phrase: mostly redundant.
-                scores[i].score *= 0.3;
-            } else {
-                // Boost specific n-grams that contain a generic root that
-                // itself appears in multiple distinct phrases.
-                for (const [root, count] of occurrences) {
-                    if (count >= 2 && token.includes(root)) {
-                        scores[i].score *= 1.3;
-                    }
-                }
+            const t = scores[i].token.toLowerCase();
+            if (constituentFreq.has(t)) {
+                const freq = constituentFreq.get(t);
+                // EXTREME boost for key ingredients ("Boss" words)
+                // If "learning" appears in 3 top n-grams, boost it significantly
+                // making it the dominant visual element.
+                scores[i].score *= (1 + freq * 1.5); 
             }
+        }
+
+        // 3. High Variance Weighting
+        // "More variance between small and big frequency topic weighting"
+        for (let i = 0; i < scores.length; i++) {
+            // Reduced curve to 1.3 to ensure we don't squash everything
+            // This is the safety fix for "lost words".
+            scores[i].score = Math.pow(scores[i].score, 1.3); 
         }
 
         scores.sort((a, b) => b.score - a.score);
@@ -142,40 +160,13 @@ export class LinguisticAggregator {
         }
         scores.sort((a, b) => b.score - a.score);
 
-        // Apply n-gram hub/cluster logic to prioritize specific phrases
-        const occurrences = new Map();
-        // Only consider top candidates for n-gram checks to save cycles
-        const candidates = scores.slice(0, limit * 3); 
-        
-        for (let i = 0; i < candidates.length; i++) {
-            for (let j = 0; j < candidates.length; j++) {
-                if (i === j) continue;
-                const ti = candidates[i].token;
-                const tj = candidates[j].token;
-                if (tj.includes(ti)) {
-                    occurrences.set(ti, (occurrences.get(ti) || 0) + 1);
-                }
-            }
-        }
+        // Removed n-gram damping logic for global tokens as well,
+        // to maintain consistency with the "Boss" word logic.
 
+        // Apply variance
+        const candidates = scores.slice(0, limit * 3);
         for (let i = 0; i < candidates.length; i++) {
-            const token = candidates[i].token;
-            const supersetCount = occurrences.get(token) || 0;
-
-            if (supersetCount >= 2) {
-                // Generic hub word ("learning")
-                candidates[i].score *= 0.5;
-            } else if (supersetCount === 1) {
-                // Redundant substring
-                candidates[i].score *= 0.3;
-            } else {
-                // Boost specific n-grams containing popular roots
-                for (const [root, count] of occurrences) {
-                    if (count >= 2 && token.includes(root)) {
-                        candidates[i].score *= 1.3;
-                    }
-                }
-            }
+            candidates[i].score = Math.pow(candidates[i].score, 1.3);
         }
 
         candidates.sort((a, b) => b.score - a.score);
@@ -219,6 +210,7 @@ export class LinguisticAggregator {
 
         for (const { token, score } of rawScores) {
             activeTokens.add(token);
+            // Normalize with high variance
             const normalized = bestScore > 0 ? score / bestScore : 0;
             let topic = state.get(token);
             if (!topic) {

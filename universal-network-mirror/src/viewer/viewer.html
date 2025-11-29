@@ -5,24 +5,9 @@
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #00ffcc; font-family: monospace; }
         canvas { display: block; }
-        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; z-index: 10; width: 100%; display: flex; justify-content: space-between; padding-right: 20px; box-sizing: border-box; }
-        .hud-left { display: flex; flex-direction: column; }
-        .hud-item { margin-bottom: 5px; text-shadow: 0 0 5px #00ffcc; white-space: nowrap; }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; z-index: 10; }
+        .hud-item { margin-bottom: 5px; text-shadow: 0 0 5px #00ffcc; }
         
-        #top-topics-strip {
-            flex-grow: 1; display: flex; justify-content: center; gap: 15px;
-            pointer-events: auto; opacity: 0; transition: opacity 0.5s;
-        }
-        .topic-pill {
-            background: rgba(0, 20, 30, 0.8); border: 1px solid #005544; color: #00aa88;
-            padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
-            transition: all 0.3s; user-select: none;
-        }
-        .topic-pill:hover { border-color: #00ffcc; color: #00ffcc; background: rgba(0, 40, 50, 0.9); }
-        .topic-pill.locked { background: #004433; border-color: #00ffcc; color: #fff; box-shadow: 0 0 5px #00ffcc; }
-        .topic-bar { height: 2px; background: #004433; width: 100%; margin-top: 2px; }
-        .topic-bar-fill { height: 100%; background: #00ffcc; width: 0%; transition: width 0.5s ease-out; }
-
         #inspector {
             position: absolute; top: 10px; right: 10px; width: 300px;
             background: rgba(0, 10, 20, 0.9); border: 1px solid #00ffcc;
@@ -33,6 +18,27 @@
         }
         #inspector.minimized { height: 30px; overflow: hidden; }
         
+        #topic-inspector {
+            position: absolute; top: 60px; left: 10px; width: 350px; bottom: 100px;
+            background: rgba(0, 15, 25, 0.95); border: 1px solid #00aa88;
+            padding: 10px; display: none; font-family: 'Courier New', monospace;
+            box-shadow: 0 0 25px rgba(0, 255, 204, 0.15);
+            backdrop-filter: blur(8px); pointer-events: auto;
+            overflow-y: auto; z-index: 20;
+        }
+        #topic-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #005544; padding-bottom: 8px; margin-bottom: 10px; }
+        #topic-title { margin: 0; color: #fff; font-size: 20px; text-transform: uppercase; }
+        #btn-close-topic { background: none; border: 1px solid #555; color: #888; cursor: pointer; padding: 2px 8px; }
+        #btn-close-topic:hover { color: #fff; border-color: #fff; }
+
+        .packet-item { border-bottom: 1px solid #224444; padding: 8px 0; font-size: 11px; }
+        .packet-header { display: flex; justify-content: space-between; cursor: pointer; color: #aaa; }
+        .packet-header:hover { color: #00ffcc; }
+        .packet-domain { font-weight: bold; color: #00ddbb; }
+        .packet-time { color: #666; }
+        .packet-body { display: none; margin-top: 5px; color: #ddd; background: rgba(0,0,0,0.3); padding: 5px; white-space: pre-wrap; word-break: break-word; }
+        .packet-item.expanded .packet-body { display: block; }
+
         #inspector-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #555; padding-bottom: 5px; margin-bottom: 10px; }
         #inspector h2 { margin: 0; color: #fff; font-size: 18px; }
         #btn-minimize { background: none; border: none; color: #00ffcc; cursor: pointer; font-weight: bold; }
@@ -61,12 +67,9 @@
 </head>
 <body>
     <div id="ui">
-        <div class="hud-left">
-            <div class="hud-item">UNIVERSAL NETWORK MIRROR SOTA</div>
-            <div class="hud-item" id="stats">FPS: 60 | PARTICLES: 0</div>
-            <div class="hud-item" id="time-offset">DELAY: -500ms</div>
-        </div>
-        <div id="top-topics-strip"></div>
+        <div class="hud-item">UNIVERSAL NETWORK MIRROR SOTA</div>
+        <div class="hud-item" id="stats">FPS: 60 | PARTICLES: 0</div>
+        <div class="hud-item" id="time-offset">DELAY: -500ms</div>
     </div>
 
     <div id="controls">
@@ -75,6 +78,14 @@
         <div style="width: 20px"></div>
         <button class="btn active" id="btn-mode-traffic">TRAFFIC</button>
         <button class="btn" id="btn-mode-linguistic">LINGUISTIC</button>
+    </div>
+
+    <div id="topic-inspector">
+        <div id="topic-header">
+            <h2 id="topic-title">TOPIC</h2>
+            <button id="btn-close-topic">CLOSE</button>
+        </div>
+        <div id="topic-list"></div>
     </div>
 
     <div id="inspector">

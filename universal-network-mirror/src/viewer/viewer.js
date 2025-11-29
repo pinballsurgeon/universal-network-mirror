@@ -15,7 +15,12 @@ const btnModeLinguistic = document.getElementById('btn-mode-linguistic');
 const inspector = document.getElementById('inspector');
 const inspectorBody = document.getElementById('inspector-body');
 const btnMinimize = document.getElementById('btn-minimize');
-const topTopicsStrip = document.getElementById('top-topics-strip');
+
+// Topic Inspector Elements
+const topicInspector = document.getElementById('topic-inspector');
+const topicTitle = document.getElementById('topic-title');
+const topicList = document.getElementById('topic-list');
+const btnCloseTopic = document.getElementById('btn-close-topic');
 
 // Inspector Fields
 const inspName = document.getElementById('insp-name');
@@ -48,8 +53,6 @@ let particles = [];
 let buffer = [];
 let selectedObject = null;
 let isMinimized = false;
-let hoverTopic = null;   // Mouse over state
-let lockedTopic = null;  // Click lock state
 
 // Linguistic Aggregator (TF/IDF + hysteresis)
 const aggregator = new LinguisticAggregator();
@@ -62,7 +65,6 @@ let isLive = true;
 let isPaused = false;
 let viewMode = 'TRAFFIC'; // 'TRAFFIC' or 'LINGUISTIC'
 let timeWindowSize = 1000 * 60; 
-let lastGlobalTopicUpdate = 0;
 
 // Load Domain Map
 function loadDomainMap() {
@@ -90,9 +92,10 @@ function formatBytes(bytes, decimals = 2) {
 }
 
 function decayStats(entity) {
-    // Slower decay for "long reach" aggregation (approx 30s half-life at 60fps)
-    const DECAY_RATE_TOKENS = 0.999;
-    const DECAY_RATE_TRAFFIC = 0.999;
+    // Balanced decay for "rolling window" aggregation (approx 5s half-life at 60fps)
+    // Fast enough to update, slow enough to read without vanishing instantly.
+    const DECAY_RATE_TOKENS = 0.998;
+    const DECAY_RATE_TRAFFIC = 0.999; 
 
     // Decay Traffic
     entity.internalTraffic *= DECAY_RATE_TRAFFIC;
@@ -374,124 +377,104 @@ class Planet {
             ctx.fillText(this.name, this.x, this.y + this.radius + 15);
         }
 
-        // Global Topic Highlight Halo
-        const activeTopic = lockedTopic || hoverTopic;
-        if (activeTopic && this.tokens.has(activeTopic)) {
-            const strength = this.tokens.get(activeTopic);
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius + 10, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(0, 255, 204, 0.5)`;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            
-            ctx.fillStyle = '#00ffcc';
-            ctx.font = '10px monospace';
-            ctx.fillText(activeTopic, this.x, this.y - this.radius - 10);
-        }
-
         if (viewMode === 'TRAFFIC') {
             for (const moon of this.moons.values()) {
                 moon.draw(ctx);
             }
         } else {
-            // Linguistic Mode: Draw Word Moons
+            // --- NEW LINGUISTIC MODE: SEMANTIC ATMOSPHERE ---
+            // "Semantic Cloud" - Words float organically around the planet.
+            // No lines, no slots. Pure size/opacity hierarchy.
+
             if (!this.tokenState) this.tokenState = new Map();
-            
-            // 1. Update Target Scores (Throttled to 1Hz and Respects Pause)
-            // We only calculate new rankings once per second to allow user to read.
-            // Also, we stop updating the list if the system is paused.
+
+            // 1. Update Targets (1Hz throttle)
             if (!isPaused && (playbackTime - (this.lastTokenUpdate || 0) > 1000)) {
                 this.lastTokenUpdate = playbackTime;
-
                 const targets = aggregator.getPlanetVisualTargets(
-                    this.domainId,
-                    this.tokens,
-                    this.tokenTotal,
-                    playbackTime
+                    this.domainId, this.tokens, this.tokenTotal, playbackTime
                 );
-                const activeTokens = new Set();
-
-                // Update targets for active tokens
-                targets.forEach(({ token, strength, rank }, index) => {
-                    activeTokens.add(token);
-                    if (!this.tokenState.has(token)) {
-                        // Initialize new token
-                        this.tokenState.set(token, { 
-                            displayRatio: 0, 
-                            phase: Math.random() * Math.PI * 2,
-                            // Distribute initial angle based on index to avoid clumping
-                            angleOffset: (rank / Math.max(1, targets.length)) * Math.PI * 2
+                
+                // Mark active tokens
+                const active = new Set();
+                targets.forEach((t, i) => {
+                    active.add(t.token);
+                    if (!this.tokenState.has(t.token)) {
+                        // Init new word particle
+                        // Random placement in a cloud band
+                        const angle = Math.random() * Math.PI * 2;
+                        // Radius distribution: Top words closer? Or random?
+                        // User said "growing and smooth". 
+                        // Let's spawn them randomly in the "atmosphere" (50px to 150px out)
+                        const radius = this.radius + 40 + Math.random() * 100;
+                        
+                        this.tokenState.set(t.token, {
+                            currentStrength: 0,
+                            radius: radius,
+                            angle: angle,
+                            speed: (Math.random() > 0.5 ? 1 : -1) * (0.000005 + Math.random() * 0.00001), // Very slow drift
+                            targetStrength: t.strength
                         });
+                    } else {
+                        // Update target strength
+                        const s = this.tokenState.get(t.token);
+                        s.targetStrength = t.strength;
                     }
-                    const state = this.tokenState.get(token);
-                    state.targetRatio = strength;
                 });
 
-                // Set target=0 for tokens that dropped out of top 20
-                for (const [token, state] of this.tokenState) {
-                    if (!activeTokens.has(token)) {
-                        state.targetRatio = 0;
+                // Mark dead tokens
+                for (const [k, v] of this.tokenState) {
+                    if (!active.has(k)) {
+                        v.targetStrength = 0; // Fade out
                     }
                 }
             }
 
-            // 2. Draw & Update Visual State
+            // 2. Render Loop
             for (const [token, state] of this.tokenState) {
-                // Smooth Lerp (Rolling Growth/Shrink)
-                // We continue to Lerp even if paused, to finish the transition smoothly
-                state.displayRatio = state.displayRatio * 0.98 + (state.targetRatio || 0) * 0.02;
-                
-                // If it's effectively invisible and unwanted, remove it
-                if (state.displayRatio < 0.01 && state.targetRatio === 0) {
+                // Smoothly lerp strength - SLOWER for more "rolling window" feel
+                state.currentStrength = state.currentStrength * 0.98 + (state.targetStrength || 0) * 0.02;
+
+                // Cleanup invisible
+                if (state.currentStrength < 0.01 && state.targetStrength === 0) {
                     this.tokenState.delete(token);
                     continue;
                 }
 
-                const ratio = state.displayRatio;
-                
-                // Natural Randomness (Breathing Effect) - Slow breathing
-                // Use playbackTime instead of Date.now() so it pauses correctly!
-                const breathe = Math.sin(playbackTime * 0.0005 + state.phase) * 0.05;
-                const noisyRatio = Math.max(0, Math.min(1, ratio + breathe));
+                // Physics: Slow Drift
+                if (!isPaused) {
+                    // Drift angle based on speed
+                    state.angle += state.speed * 16; // 16ms frame approx
+                }
 
-                // 1. Radius: More important = Closer (Lower)
-                // Increased spread to 120px to reduce crowding
-                const r = this.radius + 25 + (1 - noisyRatio) * 120;
-                
-                // 2. Speed: Flattened curve so background words don't spin too fast
-                // Base speed reduced, max speed spread reduced
-                const orbitSpeed = (0.0002 + (1 - noisyRatio) * 0.0002) * 0.05;
-                const currentAngle = state.angleOffset + (playbackTime * orbitSpeed);
+                const tx = this.x + Math.cos(state.angle) * state.radius;
+                const ty = this.y + Math.sin(state.angle) * state.radius;
 
-                const tx = this.x + Math.cos(currentAngle) * r;
-                const ty = this.y + Math.sin(currentAngle) * r;
+                // Visuals based on strength
+                // Big words = Big score. Small words = Small score.
+                // Adjusted curve for "frequency based size"
+                const size = 8 + Math.pow(state.currentStrength, 0.7) * 24; // 8px to ~32px
+                // Alpha strictly tied to frequency, smooth gradient appearance
+                const alpha = Math.min(1, Math.pow(state.currentStrength, 0.6)); 
+
+                ctx.font = `${Math.floor(size)}px monospace`;
+                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
                 
-                // 3. Size: More frequent = Larger (High Variance)
-                const fontSize = 8 + Math.floor(Math.pow(noisyRatio, 2.0) * 28);
-                
-                // Fade in/out based on ratio (Smooth entry/exit)
-                // AGGRESSIVE FADE: Squared falloff to push background words to 50% or less opacity
-                // If ratio is 0.5 (medium importance), alpha becomes 0.25 * 3 = 0.75 (clamped to 1? No)
-                // Let's try: alpha = ratio. Pure linear. 
-                // Or even stronger: alpha = ratio * ratio. 
-                // User asked for "50% transparency of this background layer".
-                // Let's cap the max alpha for non-dominant words?
-                // Or just use a steep curve.
-                const alpha = Math.min(1, Math.pow(ratio, 1.5) * 1.5); 
-                // ratio=1 -> alpha=1.5 (clamped to 1)
-                // ratio=0.5 -> 0.35 * 1.5 = 0.52 (50% transparent)
-                // ratio=0.2 -> 0.09 * 1.5 = 0.13 (Very faint)
-                
-                ctx.fillStyle = `rgba(0, 255, 204, ${alpha})`;
-                ctx.font = `${fontSize}px monospace`;
+                // Optional: Draw faint background glow for big words to make them pop?
+                // Or just the text. User said "clean".
                 ctx.fillText(token, tx, ty);
-                
-                // Draw connection line shooting out
-                ctx.strokeStyle = `rgba(0, 255, 204, ${alpha * (0.1 + ratio * 0.4)})`;
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                ctx.lineTo(tx, ty);
-                ctx.stroke();
+
+                // --- DEBUG: HIT BOX VISUALIZATION ---
+                // Drawing this helps verify if the click target matches the text.
+                /*
+                const width = token.length * size * 0.6;
+                const height = size;
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(tx - width/2 - 30, ty - height/2 - 30, width + 60, height + 60);
+                */
             }
         }
     }
@@ -604,16 +587,9 @@ function setMode(mode) {
     if (mode === 'TRAFFIC') {
         btnModeTraffic.classList.add('active');
         btnModeLinguistic.classList.remove('active');
-        topTopicsStrip.style.opacity = '0';
-        setTimeout(() => { topTopicsStrip.style.display = 'none'; }, 500);
     } else {
         btnModeTraffic.classList.remove('active');
         btnModeLinguistic.classList.add('active');
-        topTopicsStrip.style.display = 'flex';
-        // Trigger reflow
-        void topTopicsStrip.offsetWidth;
-        topTopicsStrip.style.opacity = '1';
-        updateGlobalTopics(true);
     }
 }
 
@@ -622,12 +598,54 @@ btnLive.addEventListener('click', goLive);
 btnMinimize.addEventListener('click', toggleMinimize);
 btnModeTraffic.addEventListener('click', () => setMode('TRAFFIC'));
 btnModeLinguistic.addEventListener('click', () => setMode('LINGUISTIC'));
+btnCloseTopic.addEventListener('click', closeTopicInspector);
+
+// Handle expand/collapse of packet details via delegation
+topicList.addEventListener('click', (e) => {
+    const header = e.target.closest('.packet-header');
+    if (header) {
+        const item = header.parentElement;
+        item.classList.toggle('expanded');
+    }
+});
 
 canvas.addEventListener('click', (e) => {
     const mx = e.clientX;
     const my = e.clientY;
-    let found = null;
     
+    // 1. Check Topic Words (Linguistic Mode)
+    if (viewMode === 'LINGUISTIC') {
+        // Iterate backwards through planets (top first)
+        for (const p of planets.values()) {
+            if (p.tokenState) {
+                for (const [token, state] of p.tokenState) {
+                    if (state.currentStrength < 0.01) continue;
+                    
+                    // Simple Box Hit Test
+                    const fontSize = 8 + Math.pow(state.currentStrength, 0.7) * 24;
+                    // Approximate text width (monospace ~0.6em width)
+                    const width = token.length * fontSize * 0.6;
+                    const height = fontSize;
+                    
+                    // Text is centered at state.angle, state.radius (fixed prop name)
+                    const tx = p.x + Math.cos(state.angle) * state.radius;
+                    const ty = p.y + Math.sin(state.angle) * state.radius;
+                    
+                    // Hit box centered on tx, ty
+                    // Generous padding to ensure easy clicking
+                    const padding = 30; 
+                    if (Math.abs(mx - tx) < width / 2 + padding && Math.abs(my - ty) < height / 2 + padding) {
+                        console.log("Clicked topic:", token);
+                        openTopicInspector(token);
+                        return; // Stop after finding one word
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check Physical Objects
+    let found = null;
     for (const p of planets.values()) {
         for (const m of p.moons.values()) {
             const dx = mx - m.x;
@@ -657,6 +675,72 @@ canvas.addEventListener('click', (e) => {
     }
 });
 
+function openTopicInspector(topic) {
+    topicInspector.style.display = 'block';
+    topicTitle.innerText = topic;
+    topicList.innerHTML = ''; // Clear old
+
+    // Find relevant packets in buffer (reverse order for recent first)
+    // Buffer contains particles.
+    const relevant = [];
+    for (let i = buffer.length - 1; i >= 0; i--) {
+        const p = buffer[i];
+        if (p.tokens && p.tokens[topic]) {
+            relevant.push(p);
+            if (relevant.length >= 50) break; // Limit to 50 items
+        }
+    }
+
+    if (relevant.length === 0) {
+        topicList.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">No recent packets found for this topic.</div>';
+        return;
+    }
+
+    topicList.innerHTML = relevant.map(p => {
+        const date = new Date(p.time).toLocaleTimeString();
+        const domain = domainMap.get(p.domainId) || "Unknown";
+        const isReq = (p.flags & FLAGS.IS_REQUEST);
+        const type = isReq ? "REQ" : "RES";
+        
+        let displayContent = p.sample || (p.tokens ? `Matched: ${p.tokens[topic]}x` : "No sample");
+        
+        // Use full text if available to find context
+        if (p.text) {
+            const idx = p.text.toLowerCase().indexOf(topic.toLowerCase());
+            if (idx !== -1) {
+                const start = Math.max(0, idx - 100); // Context window
+                const end = Math.min(p.text.length, idx + topic.length + 100);
+                displayContent = (start > 0 ? "..." : "") + 
+                                 p.text.substring(start, end) + 
+                                 (end < p.text.length ? "..." : "");
+            } else {
+                displayContent = p.text.substring(0, 300) + "..."; 
+            }
+        }
+
+        // Highlight the topic word
+        const cleanSample = displayContent.replace(/</g, "<").replace(/>/g, ">");
+        const highlighted = cleanSample.replace(
+            new RegExp(`(${topic})`, 'gi'), 
+            '<strong style="color:#ffffff; background:rgba(0, 255, 204, 0.2); padding:0 2px; border-radius:2px;">$1</strong>'
+        );
+
+        return `
+            <div class="packet-item">
+                <div class="packet-header">
+                    <span class="packet-time">${date}</span>
+                    <span class="packet-domain">[${type}] ${domain}</span>
+                </div>
+                <div class="packet-body">${highlighted}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function closeTopicInspector() {
+    topicInspector.style.display = 'none';
+}
+
 function drawPieChart(ctx, internal, external) {
     const total = internal + external;
     ctx.clearRect(0, 0, 100, 100);
@@ -681,63 +765,6 @@ function drawPieChart(ctx, internal, external) {
     ctx.fill();
 }
 
-function updateGlobalTopics(force = false) {
-    if (viewMode !== 'LINGUISTIC') return;
-    if (isPaused && !force) return;
-    
-    // Update every 1 second
-    if (!force && Date.now() - lastGlobalTopicUpdate < 1000) return;
-    lastGlobalTopicUpdate = Date.now();
-
-    const topTokens = aggregator.getGlobalTopTokens(6);
-    if (topTokens.length === 0) {
-        topTopicsStrip.innerHTML = '<span style="color:#444; font-size:11px; align-self:center;">WAITING FOR DATA...</span>';
-        return;
-    }
-
-    const maxCount = topTokens[0].count || 1;
-    
-    // Re-render only if needed or just replace innerHTML (simple for now)
-    // To avoid flicker/re-layout, we could diff, but for 6 items innerHTML is fine.
-    topTopicsStrip.innerHTML = topTokens.map(t => {
-        const percent = (t.count / maxCount) * 100;
-        const isLocked = (t.token === lockedTopic) ? 'locked' : '';
-        return `
-            <div class="topic-pill ${isLocked}" data-token="${t.token}">
-                ${t.token}
-                <div class="topic-bar"><div class="topic-bar-fill" style="width:${percent}%"></div></div>
-            </div>
-        `;
-    }).join('');
-}
-
-// Delegate hover/click events for global topics
-topTopicsStrip.addEventListener('mouseover', (e) => {
-    const pill = e.target.closest('.topic-pill');
-    if (pill) {
-        hoverTopic = pill.dataset.token;
-    }
-});
-topTopicsStrip.addEventListener('mouseout', (e) => {
-    hoverTopic = null;
-});
-topTopicsStrip.addEventListener('click', (e) => {
-    const pill = e.target.closest('.topic-pill');
-    if (pill) {
-        const token = pill.dataset.token;
-        if (lockedTopic === token) {
-            lockedTopic = null;
-            pill.classList.remove('locked');
-        } else {
-            // Remove locked class from other pills
-            const existing = topTopicsStrip.querySelector('.topic-pill.locked');
-            if (existing) existing.classList.remove('locked');
-            
-            lockedTopic = token;
-            pill.classList.add('locked');
-        }
-    }
-});
 
 function updateHUD() {
     if (!selectedObject) return;
@@ -834,8 +861,6 @@ function loop() {
     if (!isPaused) {
         aggregator.decayGlobalTokens();
     }
-    
-    updateGlobalTopics();
 
     if (isLive && !isPaused) {
         playbackTime = Date.now() - 500;
