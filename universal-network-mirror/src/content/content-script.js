@@ -114,6 +114,29 @@ function processQueue() {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 150); // Increased buffer for "Absoluteness"
 
+    // --- DEVELOPER SIGNAL DETECTION ---
+    const devSignals = [];
+    const fullContent = textBuffer.join(" "); // Scan raw text buffer
+    
+    // 1. Suspicious Variable Names (e.g., mmmmmmlli, camelCase with repeated chars)
+    // Looking for 3+ identical chars inside a word
+    const suspiciousVars = fullContent.match(/\b\w*([a-zA-Z])\1{3,}\w*\b/g);
+    if (suspiciousVars) {
+        suspiciousVars.forEach(v => devSignals.push({ type: 'WEIRD_VAR', value: v }));
+    }
+
+    // 2. UUIDs / API Keys / Hashes (Heuristic)
+    const uuids = fullContent.match(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g);
+    if (uuids) {
+        uuids.forEach(u => devSignals.push({ type: 'UUID', value: u }));
+    }
+
+    // 3. Common Dev Keywords
+    const devKeywords = fullContent.match(/\b(TODO|FIXME|DEBUG|console\.log|var_dump|traceback)\b/gi);
+    if (devKeywords) {
+        devKeywords.forEach(k => devSignals.push({ type: 'DEV_KEYWORD', value: k }));
+    }
+
     if (sortedTokens.length > 0) {
         try {
             // Join full text for "Deep and Full" inspection
@@ -129,6 +152,7 @@ function processQueue() {
                 tokens: Object.fromEntries(sortedTokens),
                 sample: fullText.substring(0, 200), // Keep short sample for summary
                 text: fullText, // Send full text for inspector
+                devSignals: devSignals, // NEW: Pass signals
                 meta: {
                     isIncremental: true,
                     timestamp: Date.now(),
