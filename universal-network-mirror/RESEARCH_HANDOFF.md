@@ -96,13 +96,18 @@ We are moving from "Observation" to "Deep Understanding & Interaction". The goal
 
 ## 4. Research Directives (The "To-Do" for Researchers)
 
-### Directive 1: Low-Fi Fingerprinting Algorithms (Implemented v1.0)
+### Directive 1: Low-Fi Fingerprinting Algorithms (Implemented v2.0)
 *   **Implementation**: `src/viewer/metrics/node_fingerprint.js`
-*   **Features**:
-    *   **I/O Ratio**: Balance between Internal Requests vs External Resources.
-    *   **Density**: Normalized traffic volume relative to the session max.
-    *   **Heaviness**: Average payload size (normalized to 10KB baseline).
-    *   **Complexity**: Linguistic diversity (Unique Tokens / Total Tokens).
+*   **Features (8 Dimensions)**:
+    1.  **IO_PKT**: Ratio of Internal vs Total Packets (Requests vs Responses).
+    2.  **IO_VOL**: Ratio of Internal vs Total Volume (Upload vs Download).
+    3.  **UPLOAD**: Upload Intensity (Avg Request Size).
+    4.  **DOWNLD**: Download Intensity (Avg Response Size).
+    5.  **DENSITY**: Traffic volume relative to peer max.
+    6.  **HEAVY**: Global avg packet size relative to peer max.
+    7.  **SPRAWL**: Subdomain topology (Moons per log(traffic)).
+    8.  **LINGO**: Linguistic Complexity (Unique/Total tokens).
+*   **Anomaly Detection**: Nodes with a high Euclidean distance from the network average are rendered in **RED** to signal "Weirdness".
 *   **Next Steps**: 
     *   Store these signatures over time to detect anomalies (e.g., "Why did Google's complexity drop 50%?").
     *   Vectorize these 4 dimensions into a format suitable for clustering (e.g., UMAP/t-SNE) to create a "Galaxy Map" of similar sites.

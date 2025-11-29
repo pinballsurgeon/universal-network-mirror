@@ -353,26 +353,55 @@ function updateHUD() {
 
     // Fingerprint Visualization
     if (projectionCollector.lastTick && projectionCollector.lastTick.metrics.node_fingerprint) {
-        const fps = projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints;
+        const metricsData = projectionCollector.lastTick.metrics.node_fingerprint;
+        const fps = metricsData.fingerPrints;
+        const avg = metricsData.avgProfile;
+        const totalNodes = fps.length;
+        
         const fp = fps.find(f => f.domainId === selectedObject.domainId);
         
         if (fp) {
-            const bars = [
-                { label: 'I/O BAL', val: fp.metrics.io_ratio, dev: 0 },
-                { label: 'DENSITY', val: fp.metrics.density, dev: fp.deviations.packet_dev },
-                { label: 'HEAVY', val: fp.metrics.heaviness, dev: fp.deviations.size_dev },
-                { label: 'COMPLEX', val: fp.metrics.complexity, dev: 0 }
+            // Helper to calc "Avg of Others"
+            const getOtherAvg = (key, myVal) => {
+                if (totalNodes <= 1) return 0;
+                // AvgAll = (SumOthers + MyVal) / N
+                // SumOthers = AvgAll * N - MyVal
+                // AvgOthers = SumOthers / (N-1)
+                return ((avg[key] * totalNodes) - myVal) / (totalNodes - 1);
+            };
+
+            const keys = [
+                { k: 'io_pkt', label: 'IO PKT' },
+                { k: 'io_vol', label: 'IO VOL' },
+                { k: 'upload', label: 'UPLOAD' },
+                { k: 'downld', label: 'DOWNLD' },
+                { k: 'density', label: 'DENSITY' },
+                { k: 'heavy', label: 'HEAVY' },
+                { k: 'sprawl', label: 'SPRAWL' },
+                { k: 'lingo', label: 'LINGO' }
             ];
             
-            inspFingerprint.innerHTML = bars.map(b => `
+            inspFingerprint.innerHTML = keys.map(obj => {
+                const myVal = fp.metrics[obj.k];
+                const otherAvg = getOtherAvg(obj.k, myVal);
+                const isMaxDev = (obj.k === fp.maxDevMetric);
+                
+                // Render two bars overlapping
+                // Background bar (darker cyan) for Average
+                // Foreground bar (bright cyan or RED if max dev) for Self
+                
+                return `
                 <div class="finger-row">
-                    <div class="finger-label">${b.label}</div>
-                    <div class="finger-bar-bg">
-                        <div class="finger-bar-fill ${Math.abs(b.dev) > 2 ? 'high-dev' : ''}" style="width:${Math.min(100, Math.max(5, b.val * 100))}%"></div>
+                    <div class="finger-label" style="${isMaxDev ? 'color:#ff4444; font-weight:bold;' : ''}">${obj.label}</div>
+                    <div class="finger-bar-bg" style="position:relative;">
+                        <!-- Average Marker (Darker) -->
+                        <div style="position:absolute; top:0; left:0; height:100%; background:rgba(0, 255, 204, 0.3); width:${Math.min(100, otherAvg * 100)}%;"></div>
+                        <!-- Self Marker (Bright) -->
+                        <div class="finger-bar-fill ${isMaxDev ? 'high-dev' : ''}" style="width:${Math.min(100, Math.max(1, myVal * 100))}%"></div>
                     </div>
-                    <div class="finger-val">${(b.val * 100).toFixed(0)}</div>
-                </div>
-            `).join('');
+                    <div class="finger-val">${(myVal * 100).toFixed(0)}</div>
+                </div>`;
+            }).join('');
         } else {
             inspFingerprint.innerHTML = '<div style="color:#666; font-size:10px; text-align:center;">Calculating...</div>';
         }
@@ -473,7 +502,16 @@ function loop() {
         if (!alive) {
             planets.delete(id); 
         } else {
-            planet.draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused);
+            // Find Fingerprint for visualizer (Equalizer)
+            let fp = null;
+            if (projectionCollector.lastTick && projectionCollector.lastTick.metrics.node_fingerprint) {
+                // Optimization: Maybe map this instead of find() every frame? 
+                // For <50 planets, find() is negligible.
+                const fps = projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints;
+                fp = fps.find(f => f.domainId === id);
+            }
+            
+            planet.draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fp);
         }
     }
 

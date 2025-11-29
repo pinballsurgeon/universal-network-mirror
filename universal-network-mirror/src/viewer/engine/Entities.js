@@ -24,6 +24,51 @@ function decayStats(entity) {
     }
 }
 
+// Helper for drawing Fingerprint Equalizer
+function drawEqualizer(ctx, x, y, radius, fp) {
+    if (!fp) return;
+    
+    // 8 Metrics to visualize around the planet
+    const metrics = [
+        { val: fp.metrics.io_pkt, dev: fp.deviations.io_pkt_dev },
+        { val: fp.metrics.io_vol, dev: fp.deviations.io_vol_dev },
+        { val: fp.metrics.upload, dev: fp.deviations.upload_dev },
+        { val: fp.metrics.downld, dev: fp.deviations.downld_dev },
+        { val: fp.metrics.density, dev: fp.deviations.density_dev },
+        { val: fp.metrics.heavy, dev: fp.deviations.heavy_dev },
+        { val: fp.metrics.sprawl, dev: fp.deviations.sprawl_dev },
+        { val: fp.metrics.lingo, dev: fp.deviations.lingo_dev }
+    ];
+
+    const segmentAngle = (Math.PI * 2) / metrics.length;
+
+    metrics.forEach((m, i) => {
+        const angle = i * segmentAngle;
+        
+        // Length based on value (0..1) -> 4px..30px
+        const barLen = 4 + (m.val * 26);
+        
+        // Color: Red if deviation > 0.8 (significant in 0-1 space), else Cyan
+        const color = (Math.abs(m.dev) > 0.8) ? '#ff4444' : '#00ffcc';
+        
+        const startR = radius + 5;
+        const endR = startR + barLen;
+        
+        const bx = x + Math.cos(angle) * startR;
+        const by = y + Math.sin(angle) * startR;
+        const ex = x + Math.cos(angle) * endR;
+        const ey = y + Math.sin(angle) * endR;
+        
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(ex, ey);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+    });
+}
+
 export class Moon {
     constructor(domainId, name, parent) {
         this.domainId = domainId;
@@ -256,7 +301,7 @@ export class Planet {
         return true;
     }
 
-    draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused) {
+    draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fingerprint) {
         ctx.beginPath();
         if (this.bloatScore > 500) {
             for (let i = 0; i < Math.PI * 2; i += 0.5) {
@@ -275,9 +320,20 @@ export class Planet {
             ctx.stroke();
         }
 
-        ctx.fillStyle = this.color;
+        // Anomaly Color Override - THRESHOLD INCREASED TO 2.5
+        if (fingerprint && fingerprint.weirdness > 2.5) {
+            ctx.fillStyle = '#ff4444'; // Red for anomalous nodes
+        } else {
+            ctx.fillStyle = this.color;
+        }
+        
         ctx.fill();
         ctx.globalAlpha = 1.0;
+
+        // Draw Fingerprint Equalizer
+        if (fingerprint) {
+            drawEqualizer(ctx, this.x, this.y, this.radius, fingerprint);
+        }
 
         if (this.mass > 2 || selectedObject === this) {
             ctx.fillStyle = '#fff';
