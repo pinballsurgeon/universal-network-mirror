@@ -2,6 +2,7 @@ import { FLAGS, MAX_PARTICLES } from '../common/constants.js';
 import { LinguisticAggregator } from './aggregator.js';
 import { Planet, Particle } from './engine/Entities.js';
 import { ProjectionCollector } from './projections/ProjectionCollector.js';
+import { HistoryManager } from './history/HistoryManager.js';
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -60,6 +61,9 @@ const aggregator = new LinguisticAggregator();
 
 // Projection Collector (Metrics & Testing)
 const projectionCollector = new ProjectionCollector();
+
+// History Manager (Time Travel & Compression)
+const historyManager = new HistoryManager();
 
 // Time State
 let historyStartTime = Date.now();
@@ -359,14 +363,12 @@ function updateHUD() {
         const totalNodes = fps.length;
         
         const fp = fps.find(f => f.domainId === selectedObject.domainId);
+        const history = historyManager.getDomainHistory(selectedObject.name);
         
         if (fp) {
             // Helper to calc "Avg of Others"
             const getOtherAvg = (key, myVal) => {
                 if (totalNodes <= 1) return 0;
-                // AvgAll = (SumOthers + MyVal) / N
-                // SumOthers = AvgAll * N - MyVal
-                // AvgOthers = SumOthers / (N-1)
                 return ((avg[key] * totalNodes) - myVal) / (totalNodes - 1);
             };
 
@@ -384,19 +386,23 @@ function updateHUD() {
             inspFingerprint.innerHTML = keys.map(obj => {
                 const myVal = fp.metrics[obj.k];
                 const otherAvg = getOtherAvg(obj.k, myVal);
+                const histVal = history ? history.metrics[obj.k] : 0;
                 const isMaxDev = (obj.k === fp.maxDevMetric);
                 
-                // Render two bars overlapping
-                // Background bar (darker cyan) for Average
-                // Foreground bar (bright cyan or RED if max dev) for Self
+                // Visual Layers:
+                // 1. Avg Other (Bg)
+                // 2. History (White Border Ghost)
+                // 3. Current (Foreground)
                 
+                const histBar = history ? 
+                    `<div style="position:absolute; top:0; left:0; height:100%; border:1px dashed rgba(255,255,255,0.6); width:${Math.min(100, histVal * 100)}%; z-index:2;"></div>` : '';
+
                 return `
                 <div class="finger-row">
                     <div class="finger-label" style="${isMaxDev ? 'color:#ff4444; font-weight:bold;' : ''}">${obj.label}</div>
                     <div class="finger-bar-bg" style="position:relative;">
-                        <!-- Average Marker (Darker) -->
-                        <div style="position:absolute; top:0; left:0; height:100%; background:rgba(0, 255, 204, 0.3); width:${Math.min(100, otherAvg * 100)}%;"></div>
-                        <!-- Self Marker (Bright) -->
+                        <div style="position:absolute; top:0; left:0; height:100%; background:rgba(0, 255, 204, 0.2); width:${Math.min(100, otherAvg * 100)}%; z-index:1;"></div>
+                        ${histBar}
                         <div class="finger-bar-fill ${isMaxDev ? 'high-dev' : ''}" style="width:${Math.min(100, Math.max(1, myVal * 100))}%"></div>
                     </div>
                     <div class="finger-val">${(myVal * 100).toFixed(0)}</div>
@@ -425,19 +431,55 @@ chrome.runtime.sendMessage({ type: 'QUERY_BUFFER' }, (response) => {
     }
 });
 
-const TIMELINE_HEIGHT = 60;
+const TIMELINE_HEIGHT = 80;
 function drawTimeline() {
     const y = height - TIMELINE_HEIGHT;
-    ctx.fillStyle = '#111';
+    
+    // Background
+    ctx.fillStyle = 'rgba(10, 20, 30, 0.9)';
     ctx.fillRect(0, y, width, TIMELINE_HEIGHT);
+    
     const totalDuration = historyEndTime - historyStartTime;
     if (totalDuration <= 0) return;
+
+    // --- ACTIVITY HEATMAP (Adobe Premiere Style) ---
+    // Use historyManager to get aggregated activity density
+    // We map the *entire* history buffer to the screen width
+    
+    const heatmap = historyManager.getActivityHeatmap(100); // 100 bins
+    const binWidth = width / heatmap.length;
+    
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    
+    heatmap.forEach((val, i) => {
+        const h = val * (TIMELINE_HEIGHT - 10);
+        const bx = i * binWidth;
+        const by = height - h;
+        
+        ctx.fillStyle = `hsl(${180 + val * 60}, 100%, 50%)`; // Cyan to Blue/Purple
+        ctx.fillRect(bx, by, binWidth - 1, h);
+    });
+
+    // Playhead
     const playheadX = ((playbackTime - historyStartTime) / totalDuration) * width;
-    ctx.fillStyle = isLive ? '#00ffcc' : '#ffff00';
-    ctx.fillRect(playheadX, y, 2, TIMELINE_HEIGHT);
+    
+    // Scrubber Line
+    ctx.strokeStyle = isLive ? '#00ffcc' : '#ffff00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(playheadX, y);
+    ctx.lineTo(playheadX, height);
+    ctx.stroke();
+    
+    // Time Label
     ctx.fillStyle = '#fff';
     ctx.font = '10px monospace';
     ctx.fillText(new Date(playbackTime).toLocaleTimeString(), playheadX + 5, y + 15);
+    
+    // Zoom/Range Indicators (Mockup for V2)
+    ctx.fillStyle = '#555';
+    ctx.fillText("ZOOM: 1x [Full History]", 10, y + 15);
 }
 
 canvas.addEventListener('mousedown', (e) => {
@@ -551,6 +593,20 @@ function loop() {
         aggregator
     };
     projectionCollector.collectAndBroadcast(engineState);
+    
+    // Save to History Tape (if we have a new tick)
+    if (projectionCollector.lastTick) {
+        // Simple dedup based on timestamp to avoid duplicate pushes per frame
+        const lastRecorded = historyManager.tape.length > 0 ? historyManager.tape[historyManager.tape.length-1] : null;
+        if (!lastRecorded || lastRecorded.ts !== projectionCollector.lastTick.ts) {
+            historyManager.push(projectionCollector.lastTick);
+            
+            // Persist Fingerprints for Long-Term History
+            if (projectionCollector.lastTick.metrics.node_fingerprint) {
+                historyManager.updateFingerprints(projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints);
+            }
+        }
+    }
 }
 
 loop();
