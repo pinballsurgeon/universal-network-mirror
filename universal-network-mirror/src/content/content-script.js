@@ -12,7 +12,8 @@ let extractionTimer = null;
 
 // Helper to filter noise tags
 function isNoise(tagName) {
-    return ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'NAV', 'FOOTER', 'SVG', 'IMG'].includes(tagName);
+    // Absoluteness: We removed NAV and FOOTER. We want everything.
+    return ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'IMG'].includes(tagName);
 }
 
 // Recursive Harvester that pierces Shadow DOMs
@@ -22,7 +23,8 @@ function deepHarvest(node, textBuffer, headlineBuffer) {
     // 1. Text Node
     if (node.nodeType === Node.TEXT_NODE) {
         const txt = node.nodeValue.trim();
-        if (txt.length > 3) {
+        // Lower threshold for "Absoluteness"
+        if (txt.length >= 2) {
             // Determine context from parent
             const p = node.parentNode;
             if (p) {
@@ -78,11 +80,9 @@ function processQueue() {
     const headlineBuffer = [];
 
     uniqueNodes.forEach(node => {
-        // Only process if still attached (or is a root/fragment)
-        // Note: ShadowRoots aren't in document, so check nodeType
-        if (node.isConnected || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
-             deepHarvest(node, textBuffer, headlineBuffer);
-        }
+        // Absoluteness: Capture everything, even if detached (virtual DOM, fragments)
+        // We removed the isConnected check to ensure we catch transient/streaming nodes
+        deepHarvest(node, textBuffer, headlineBuffer);
     });
 
     if (textBuffer.length === 0 && headlineBuffer.length === 0) return;
@@ -111,7 +111,7 @@ function processQueue() {
 
     const sortedTokens = Object.entries(tokenMap)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 300); // Doubled buffer for deeper context
+        .slice(0, 300); // Increased buffer for "Absoluteness"
 
     // --- DEVELOPER SIGNAL DETECTION ---
     const devSignals = [];
@@ -142,22 +142,31 @@ function processQueue() {
             const combinedText = textBuffer.join(" ");
             const headlines = headlineBuffer.join(" ");
             
-            // Limit to reasonable size (e.g. 50KB) to prevent massive messages but capture long comments
-            const fullText = (headlines + " " + combinedText).substring(0, 50000);
+            const fullText = headlines + "\n\n" + combinedText;
             
-            chrome.runtime.sendMessage({
-                type: MSG_CAPTURE_PAYLOAD,
-                payload: "Deep Harvest", 
-                tokens: Object.fromEntries(sortedTokens),
-                sample: fullText.substring(0, 200), // Keep short sample for summary
-                text: fullText, // Send full text for inspector
-                devSignals: devSignals, // NEW: Pass signals
-                meta: {
-                    isIncremental: true,
-                    timestamp: Date.now(),
-                    deep: true
-                }
-            });
+            // CHUNKED TRANSMISSION (Stream as Particles)
+            // Instead of one giant message, we send "Packets of Reality".
+            // This avoids size limits and visualizes "Mass" correctly in the Physics Engine.
+            const CHUNK_SIZE = 10000; // 10KB chunks
+            
+            for (let i = 0; i < fullText.length; i += CHUNK_SIZE) {
+                const chunk = fullText.substring(i, i + CHUNK_SIZE);
+                
+                chrome.runtime.sendMessage({
+                    type: MSG_CAPTURE_PAYLOAD,
+                    payload: "Deep Harvest Chunk", 
+                    tokens: i === 0 ? Object.fromEntries(sortedTokens) : {}, // Only send tokens once to avoid skewing stats? Or send for all? Send for first.
+                    sample: chunk.substring(0, 100), 
+                    text: chunk, 
+                    devSignals: i === 0 ? devSignals : [], 
+                    meta: {
+                        isIncremental: true,
+                        timestamp: Date.now() + (i / 100), // Stagger timestamps slightly for particle stream effect
+                        deep: true,
+                        chunkIndex: i / CHUNK_SIZE
+                    }
+                });
+            }
         } catch (e) { }
     }
 }

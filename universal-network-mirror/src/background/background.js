@@ -230,13 +230,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         meta.text = message.text;
         meta.devSignals = message.devSignals; // Pass developer signals
 
+        // If 'text' is provided (Chunked mode), use it as content and size source.
+        // Otherwise fallback to 'payload'.
+        const content = message.text || message.payload;
+        const size = message.text ? message.text.length : message.payload.length;
+
         ingestPacket(
             sender.tab ? sender.tab.url : 'unknown',
             'GET',
             'document',
-            message.payload.length,
+            size,
             Date.now(),
-            message.payload,
+            content,
             meta
         );
     }
