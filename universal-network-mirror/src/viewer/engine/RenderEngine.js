@@ -1,3 +1,5 @@
+import { BlackHole } from './Entities.js';
+
 export class RenderEngine {
     constructor(canvas, historyManager) {
         this.canvas = canvas;
@@ -75,11 +77,15 @@ export class RenderEngine {
         this.ctx.fillText("ZOOM: 1x [Full History]", 10, y + 15);
     }
 
-    drawScene(physicsState, selectedObject, viewMode, aggregator, playbackTime, isPaused, projectionTick) {
+    drawScene(physicsState, selectedObject, viewMode, aggregator, playbackTime, isPaused, projectionTick, showBlackHoles = true) {
         const { planets, particles, sunX, sunY } = physicsState;
 
         // Draw Planets
         for (const [id, planet] of planets.entries()) {
+            if (!showBlackHoles && planet instanceof BlackHole) {
+                continue;
+            }
+
             // Find Fingerprint for visualizer (Equalizer)
             let fp = null;
             if (projectionTick && projectionTick.metrics.node_fingerprint) {

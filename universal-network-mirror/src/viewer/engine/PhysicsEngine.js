@@ -24,7 +24,7 @@ export class PhysicsEngine {
 
     addParticle(data) {
         this.buffer.push(data);
-        console.log(`PhysicsEngine: Added particle to buffer. Size: ${this.buffer.length}`);
+        // console.log(`PhysicsEngine: Added particle to buffer. Size: ${this.buffer.length}`);
     }
 
     // Process buffer into active particles based on time window
@@ -45,14 +45,14 @@ export class PhysicsEngine {
                 }
             } else {
                  if (this.buffer.length < 5) { // Only log for small buffers to avoid spam
-                     console.log(`SKIP: P=${p.time}, Win=[${windowStart}-${windowEnd}], Rate=${samplingRate}`);
+                     // console.log(`SKIP: P=${p.time}, Win=[${windowStart}-${windowEnd}], Rate=${samplingRate}`);
                  }
             }
         }
         
         // DEBUG: Force log if buffer pending
         if (this.buffer.length > 0 && this.particles.length === 0) {
-             console.log(`DEBUG: Buffer=${this.buffer.length}, Window=[${windowStart}, ${windowEnd}], P0.time=${this.buffer[0].time}, Rate=${samplingRate}`);
+             // console.log(`DEBUG: Buffer=${this.buffer.length}, Window=[${windowStart}, ${windowEnd}], P0.time=${this.buffer[0].time}, Rate=${samplingRate}`);
         }
     }
 

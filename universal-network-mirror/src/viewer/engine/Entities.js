@@ -253,6 +253,7 @@ export class Planet {
         
         this.color = `hsl(${Math.random() * 360}, 70%, 50%)`;
         this.lastActive = Date.now();
+        this.gravity = 0.2; // Default gravity
     }
 
     cleanName(name) {
@@ -486,6 +487,82 @@ export class Planet {
     }
 }
 
+export class BlackHole extends Planet {
+    constructor(planet) {
+        super(planet.domainId, planet.name, planet.sunX, planet.sunY);
+        // Transfer stats
+        this.mass = planet.mass * 2; // Increased mass
+        this.radius = planet.radius;
+        this.angle = planet.angle;
+        this.distance = planet.distance;
+        this.speed = planet.speed;
+        this.moons = planet.moons;
+        this.artifacts = planet.artifacts;
+        this.internalTraffic = planet.internalTraffic;
+        this.externalTraffic = planet.externalTraffic;
+        
+        this.gravity = 2.0; // 10x gravity
+        this.accretionDisk = [];
+    }
+
+    update(ctx) {
+        super.update(ctx);
+        
+        // Accretion Disk Animation
+        if (Math.random() > 0.5) {
+            this.accretionDisk.push({
+                angle: Math.random() * Math.PI * 2,
+                dist: this.radius + Math.random() * 20,
+                speed: 0.1 + Math.random() * 0.1,
+                size: Math.random() * 2
+            });
+        }
+        
+        this.accretionDisk.forEach(p => {
+            p.angle += p.speed;
+            p.dist *= 0.99; // Spiral in
+        });
+        
+        this.accretionDisk = this.accretionDisk.filter(p => p.dist > this.radius);
+        
+        return true;
+    }
+
+    draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fingerprint) {
+        // Event Horizon
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#000000';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Accretion Disk
+        ctx.fillStyle = '#ff4400';
+        this.accretionDisk.forEach(p => {
+            const px = this.x + Math.cos(p.angle) * p.dist;
+            const py = this.y + Math.sin(p.angle) * p.dist;
+            ctx.beginPath();
+            ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Label
+        if (selectedObject === this) {
+            ctx.fillStyle = '#ff0000';
+            ctx.font = 'bold 12px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText("TERMINATED: " + this.name, this.x, this.y + this.radius + 20);
+        }
+    }
+
+    absorb(particle, aggregator) {
+        // Destruction
+        return; 
+    }
+}
+
 export class Particle {
     constructor(data, sunX, sunY, width, height) {
         this.data = data;
@@ -522,7 +599,7 @@ export class Particle {
 
         if (planet) {
             let target = planet;
-            if (this.data.isSubdomain && ctx.domainMap.has(this.data.domainId)) {
+            if (this.data.isSubdomain && ctx.domainMap.has(this.data.domainId) && !(planet instanceof BlackHole)) {
                  target = planet.getMoon(this.data.domainId, ctx.domainMap.get(this.data.domainId));
             }
             const dx = target.x - this.x;
@@ -533,8 +610,10 @@ export class Particle {
                 target.absorb(this, ctx.aggregator);
                 return false; 
             }
-            this.vx += (dx / dist) * 0.2;
-            this.vy += (dy / dist) * 0.2;
+            
+            const gravity = target.gravity || 0.2;
+            this.vx += (dx / dist) * gravity;
+            this.vy += (dy / dist) * gravity;
         } else {
              const dx = ctx.sunX - this.x;
              const dy = ctx.sunY - this.y;

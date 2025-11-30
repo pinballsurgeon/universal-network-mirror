@@ -17,6 +17,10 @@ export class HistoryManager {
         
         // Long-term stats: "google.com" -> { metrics: {...}, count: 100, lastSeen: ts }
         this.domainStats = new Map();
+        
+        // Snapshots: "google.com" -> [{ ts, metrics, label }]
+        this.snapshots = new Map();
+        
         this.lastSave = 0;
         this.loadHistory();
     }
@@ -82,17 +86,16 @@ export class HistoryManager {
     // --- LONG TERM HISTORY (PERSISTENCE) ---
 
     loadHistory() {
-        chrome.storage.local.get(['domainStats'], (result) => {
+        chrome.storage.local.get(['domainStats', 'domainSnapshots'], (result) => {
             if (result.domainStats) {
                 try {
-                    // Convert object back to Map if needed, or just use Object
-                    // Storage stores as Object.
-                    Object.entries(result.domainStats).forEach(([k, v]) => {
-                        this.domainStats.set(k, v);
-                    });
-                } catch (e) {
-                    console.error("Failed to load history", e);
-                }
+                    Object.entries(result.domainStats).forEach(([k, v]) => this.domainStats.set(k, v));
+                } catch (e) { console.error("Failed to load history", e); }
+            }
+            if (result.domainSnapshots) {
+                try {
+                    Object.entries(result.domainSnapshots).forEach(([k, v]) => this.snapshots.set(k, v));
+                } catch (e) { console.error("Failed to load snapshots", e); }
             }
         });
     }
@@ -123,11 +126,65 @@ export class HistoryManager {
     }
 
     saveHistory() {
-        const obj = Object.fromEntries(this.domainStats);
-        chrome.storage.local.set({ domainStats: obj });
+        const objStats = Object.fromEntries(this.domainStats);
+        const objSnaps = Object.fromEntries(this.snapshots);
+        chrome.storage.local.set({ 
+            domainStats: objStats,
+            domainSnapshots: objSnaps
+        });
     }
 
     getDomainHistory(domainName) {
         return this.domainStats.get(domainName);
+    }
+
+    // --- SNAPSHOTS & COMPARATIVES ---
+
+    takeSnapshot(domainName, currentMetrics, label = "Manual Snapshot") {
+        if (!this.snapshots.has(domainName)) {
+            this.snapshots.set(domainName, []);
+        }
+        const snaps = this.snapshots.get(domainName);
+        snaps.push({
+            ts: Date.now(),
+            metrics: { ...currentMetrics },
+            label: label
+        });
+        // Limit snapshots per domain
+        if (snaps.length > 10) snaps.shift();
+        this.saveHistory();
+    }
+
+    getSnapshots(domainName) {
+        return this.snapshots.get(domainName) || [];
+    }
+
+    compareSnapshots(snapA, snapB) {
+        if (!snapA || !snapB) return null;
+        
+        const diffs = {};
+        let dotProduct = 0;
+        let magA = 0;
+        let magB = 0;
+
+        Object.keys(snapA.metrics).forEach(k => {
+            const valA = snapA.metrics[k] || 0;
+            const valB = snapB.metrics[k] || 0;
+            
+            diffs[k] = {
+                valA, valB,
+                diff: valB - valA,
+                pct: valA !== 0 ? ((valB - valA) / valA) * 100 : 0
+            };
+
+            // Cosine Sim Prep
+            dotProduct += valA * valB;
+            magA += valA * valA;
+            magB += valB * valB;
+        });
+
+        const similarity = (magA > 0 && magB > 0) ? (dotProduct / (Math.sqrt(magA) * Math.sqrt(magB))) : 0;
+
+        return { diffs, similarity };
     }
 }

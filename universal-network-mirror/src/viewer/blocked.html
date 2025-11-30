@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Event Horizon</title>
+    <style>
+        body {
+            background: #000;
+            color: #fff;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        h1 {
+            color: #ff4444;
+            font-size: 3em;
+            text-shadow: 0 0 20px #ff0000;
+            margin-bottom: 20px;
+        }
+        .container {
+            border: 1px solid #ff4444;
+            padding: 40px;
+            background: rgba(20, 0, 0, 0.8);
+            box-shadow: 0 0 50px rgba(255, 0, 0, 0.2);
+            text-align: center;
+            max-width: 600px;
+        }
+        p { font-size: 1.2em; color: #ccc; }
+        .domain { color: #fff; font-weight: bold; }
+        
+        #btn-unblock {
+            background: #000;
+            border: 2px solid #ff4444;
+            color: #ff4444;
+            padding: 15px 30px;
+            font-family: monospace;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin-top: 30px;
+            transition: all 0.2s;
+        }
+        #btn-unblock:hover {
+            background: #ff4444;
+            color: #000;
+            box-shadow: 0 0 20px #ff4444;
+        }
+        
+        /* Accretion Disk Animation */
+        .singularity {
+            width: 100px; height: 100px; background: #000;
+            border-radius: 50%;
+            box-shadow: 0 0 20px #fff, 0 0 60px #ff4400;
+            margin: 0 auto 40px;
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="singularity"></div>
+        <h1>EVENT HORIZON</h1>
+        <p>The domain <span id="domain" class="domain">...</span> has been consumed.</p>
+        <p>No data can escape.</p>
+        
+        <button id="btn-unblock">RESTORE REALITY</button>
+    </div>
+
+    <script>
+        // Get URL params? The redirect doesn't pass params by default unless regex.
+        // But we are on the same domain, so we can't easily see the original URL in the address bar if it was a redirect?
+        // Actually, declarativeNetRequest redirect changes the URL in the bar to the extension page.
+        // Wait, that's bad UX. Usually we want to know what was blocked.
+        // We can use regex substitution in redirect rules to pass the original URL.
+        // But for now, let's assume the user knows or we just say "This Site".
+        // Actually, if we use regexFilter instead of urlFilter, we can capture.
+        // Or we can just let the user click "Unblock" and we ask them "Which domain?" 
+        // No, better: The extension can check `activeTab` or we update the redirect rule to pass `?url=` param.
+        
+        // Let's stick to simple first. If we can't get the domain easily, we unblock *everything*? No.
+        // We need the domain to unblock.
+        
+        // BETTER APPROACH:
+        // Update background.js to include `?url=` in the redirect path.
+        // But `urlFilter` doesn't support capturing. `regexFilter` does.
+        // `regexFilter` is more expensive.
+        
+        // Alternative: The user just clicked a link to `example.com`.
+        // The address bar shows `chrome-extension://.../blocked.html`.
+        // Javascript `document.referrer` might show it? Probably not if blocked.
+        
+        // Let's try to parse `window.location.search` if I can get background.js to pass it.
+        // If not, I'll just hardcode a prompt.
+        
+        // Update: I will modify background.js to use regex substitution for the redirect rule in the NEXT step if needed.
+        // For now, let's assume the query param is passed or we default to "Current Site".
+        
+        const params = new URLSearchParams(window.location.search);
+        const url = params.get('url');
+        const domain = url ? new URL(url).hostname : "THIS DOMAIN";
+        
+        document.getElementById('domain').innerText = domain;
+        
+        document.getElementById('btn-unblock').addEventListener('click', () => {
+            if (domain === "THIS DOMAIN") {
+                alert("Cannot determine domain. Please manage Black Holes from the Viewer.");
+                return;
+            }
+            
+            chrome.runtime.sendMessage({
+                type: 'UNBLOCK_DOMAIN',
+                domain: domain
+            }, () => {
+                // Redirect back
+                if (url) window.location.href = url;
+            });
+        });
+    </script>
+</body>
+</html>

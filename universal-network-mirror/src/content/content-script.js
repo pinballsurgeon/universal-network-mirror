@@ -4,7 +4,6 @@
 const MSG_CAPTURE_PAYLOAD = 'CAPTURE_PAYLOAD';
 
 // --- STATE ---
-const processedNodes = new WeakSet();
 const observedRoots = new WeakSet();
 let processingQueue = [];
 let extractionTimer = null;
@@ -112,7 +111,7 @@ function processQueue() {
 
     const sortedTokens = Object.entries(tokenMap)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 150); // Increased buffer for "Absoluteness"
+        .slice(0, 300); // Doubled buffer for deeper context
 
     // --- DEVELOPER SIGNAL DETECTION ---
     const devSignals = [];
@@ -143,8 +142,8 @@ function processQueue() {
             const combinedText = textBuffer.join(" ");
             const headlines = headlineBuffer.join(" ");
             
-            // Limit to reasonable size (e.g. 10KB) to prevent massive messages
-            const fullText = (headlines + " " + combinedText).substring(0, 10000);
+            // Limit to reasonable size (e.g. 50KB) to prevent massive messages but capture long comments
+            const fullText = (headlines + " " + combinedText).substring(0, 50000);
             
             chrome.runtime.sendMessage({
                 type: MSG_CAPTURE_PAYLOAD,
@@ -174,18 +173,15 @@ function attachObserver(targetNode) {
         mutations.forEach(m => {
             if (m.type === 'childList') {
                 m.addedNodes.forEach(node => {
-                    if (!processedNodes.has(node)) {
-                        processedNodes.add(node);
-                        processingQueue.push(node);
-                        hasWork = true;
-                    }
+                    // Always process new nodes. Deduplication happens in processQueue.
+                    processingQueue.push(node);
+                    hasWork = true;
                 });
             } else if (m.type === 'characterData') {
-                const node = m.target; // The text node itself
-                if (!processedNodes.has(node)) {
-                    processingQueue.push(node); // Re-scan modified text
-                    hasWork = true;
-                }
+                const node = m.target; 
+                // Always re-process modified text.
+                processingQueue.push(node); 
+                hasWork = true;
             }
         });
 
@@ -210,13 +206,11 @@ function init() {
 
     // 2. Initial Deep Scan
     if (document.body) {
-        processedNodes.add(document.body);
         processingQueue.push(document.body); // Queue entire body for deep harvest
         processQueue();
     } else {
         // Fallback for document_start execution if body not ready
         window.addEventListener('DOMContentLoaded', () => {
-            processedNodes.add(document.body);
             processingQueue.push(document.body);
             processQueue();
         });

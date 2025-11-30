@@ -5,6 +5,7 @@
   "description": "A Lossless, Rewindable, 4D Solar System of your digital life.",
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
     "scripting",
     "storage",
     "tabs",

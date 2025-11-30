@@ -86,6 +86,17 @@
         <div style="width: 20px"></div>
         <button class="btn active" id="btn-mode-traffic">TRAFFIC</button>
         <button class="btn" id="btn-mode-linguistic">LINGUISTIC</button>
+        <div style="width: 20px"></div>
+        <button class="btn" id="btn-blackhole-list" style="border-color: #ff4444; color: #ff4444;">BLACK HOLES</button>
+        <button class="btn active" id="btn-toggle-void" style="border-color: #ff4444; color: #ff4444; font-size: 10px;">SHOW VOID</button>
+    </div>
+
+    <div id="blackhole-inspector" style="position: absolute; top: 60px; left: 10px; width: 300px; bottom: 100px; background: rgba(20, 0, 0, 0.95); border: 1px solid #ff4444; padding: 10px; display: none; font-family: 'Courier New', monospace; box-shadow: 0 0 25px rgba(255, 68, 68, 0.15); backdrop-filter: blur(8px); pointer-events: auto; overflow-y: auto; z-index: 20;">
+        <div id="blackhole-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #550000; padding-bottom: 8px; margin-bottom: 10px;">
+            <h2 style="margin: 0; color: #ff4444; font-size: 18px;">EVENT HORIZON</h2>
+            <button id="btn-close-bh" style="background: none; border: 1px solid #844; color: #f88; cursor: pointer; padding: 2px 8px;">CLOSE</button>
+        </div>
+        <div id="blackhole-list"></div>
     </div>
 
     <div id="topic-inspector">
@@ -103,11 +114,19 @@
         </div>
         
         <div id="inspector-body">
+            <button id="btn-black-hole" class="btn" style="width: 100%; margin-bottom: 10px; border-color: #ff4444; color: #ff4444; display: none;">BLACK HOLE</button>
+
             <div class="stat-row"><span>TYPE</span><span class="stat-value" id="insp-type">PLANET</span></div>
             <div class="stat-row"><span>MASS</span><span class="stat-value" id="insp-mass">0</span></div>
             <div class="stat-row"><span>BLOAT SCORE</span><span class="stat-value" id="insp-bloat">0</span></div>
             <div class="stat-row"><span>RATING</span><span class="stat-value" id="insp-grade">A</span></div>
             
+            <button id="btn-snapshot" class="btn" style="width: 100%; margin: 10px 0; border-color: #00ffcc; color: #00ffcc;">TAKE SNAPSHOT</button>
+
+            <div class="section-title">HISTORY SNAPSHOTS</div>
+            <div id="insp-snapshots" class="token-list" style="max-height: 100px; overflow-y: auto;"></div>
+            <div id="insp-comparison" style="display: none; background: rgba(0, 50, 50, 0.8); padding: 5px; margin-top: 5px; border: 1px solid #00ffcc;"></div>
+
             <div class="section-title">FINGERPRINT SIGNATURE</div>
             <div id="insp-fingerprint">
                 <!-- Bars injected by JS -->

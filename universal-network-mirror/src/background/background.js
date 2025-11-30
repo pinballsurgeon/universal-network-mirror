@@ -22,6 +22,9 @@ let nextVectorId = 1;
 
 // Load persisted state
 chrome.storage.local.get(['domainMap', 'vectorMap', 'nextDomainId', 'nextVectorId'], (result) => {
+  // Sync Orphaned Rules (Fix for user issue: blocked sites not in storage)
+  syncOrphanedRules();
+
   if (result && result.domainMap) {
       try {
           domainMap = new Map(Object.entries(result.domainMap));
@@ -79,6 +82,31 @@ function getVectorId(content) {
         nextVectorId 
     });
     return id;
+}
+
+function syncOrphanedRules() {
+    chrome.declarativeNetRequest.getDynamicRules((rules) => {
+        chrome.storage.local.get(['blackHoles'], (result) => {
+            const blackHoles = result.blackHoles || {};
+            let updated = false;
+            
+            rules.forEach(rule => {
+                // Check if this is one of our rules (has urlFilter starting with ||)
+                if (rule.condition.urlFilter && rule.condition.urlFilter.startsWith('||')) {
+                    const domain = rule.condition.urlFilter.substring(2);
+                    if (!blackHoles[domain]) {
+                        console.log(`[SYNC] Found orphaned rule for ${domain}. Restoring to storage.`);
+                        blackHoles[domain] = { timestamp: Date.now() };
+                        updated = true;
+                    }
+                }
+            });
+            
+            if (updated) {
+                chrome.storage.local.set({ blackHoles });
+            }
+        });
+    });
 }
 
 function ingestPacket(url, method, type, size, time, content = '', meta = {}, initiator = null, isRequest = false) {
@@ -214,6 +242,95 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === 'QUERY_BUFFER') {
         sendResponse({ buffer: ringBuffer });
+    }
+    
+    if (message.type === 'BLOCK_DOMAIN') {
+        const domain = message.domain;
+        console.log(`[BLACK HOLE] Blocking domain: ${domain}`);
+        
+        // Persist state
+        chrome.storage.local.get(['blackHoles'], (result) => {
+            const blackHoles = result.blackHoles || {};
+            // Store basic info for restoration (position is nice but optional, viewer handles logic)
+            blackHoles[domain] = { timestamp: Date.now() };
+            chrome.storage.local.set({ blackHoles });
+        });
+
+        // Use declarativeNetRequest to block/redirect
+        chrome.declarativeNetRequest.getDynamicRules((rules) => {
+            let maxId = (rules.length > 0 ? Math.max(...rules.map(r => r.id)) : 0);
+            const id1 = maxId + 1;
+            const id2 = maxId + 2;
+            
+            const newRules = [
+                // 1. Redirect Main Frame to Blocked Page
+                {
+                    "id": id1,
+                    "priority": 1,
+                    "action": { 
+                        "type": "redirect",
+                        "redirect": { "extensionPath": "/src/viewer/blocked.html" }
+                    },
+                    "condition": { 
+                        "urlFilter": `||${domain}`, 
+                        "resourceTypes": ["main_frame"] 
+                    }
+                },
+                // 2. Block everything else (subresources, etc.)
+                {
+                    "id": id2,
+                    "priority": 1,
+                    "action": { "type": "block" },
+                    "condition": { 
+                        "urlFilter": `||${domain}`, 
+                        "resourceTypes": ["sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest", "ping", "csp_report", "media", "websocket", "other"] 
+                    }
+                }
+            ];
+
+            chrome.declarativeNetRequest.updateDynamicRules({
+                addRules: newRules
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.error("[BLACK HOLE] Failed to add rules:", chrome.runtime.lastError);
+                } else {
+                    console.log(`[BLACK HOLE] Rules added for ${domain} (IDs: ${id1}, ${id2})`);
+                }
+            });
+        });
+    }
+
+    if (message.type === 'UNBLOCK_DOMAIN') {
+        const domain = message.domain;
+        console.log(`[BLACK HOLE] Unblocking domain: ${domain}`);
+        
+        // Remove from storage
+        chrome.storage.local.get(['blackHoles'], (result) => {
+            const blackHoles = result.blackHoles || {};
+            delete blackHoles[domain];
+            chrome.storage.local.set({ blackHoles });
+        });
+
+        chrome.declarativeNetRequest.getDynamicRules((rules) => {
+            // Find rules for this domain
+            const idsToRemove = rules
+                .filter(r => r.condition.urlFilter === `||${domain}`)
+                .map(r => r.id);
+            
+            if (idsToRemove.length > 0) {
+                chrome.declarativeNetRequest.updateDynamicRules({
+                    removeRuleIds: idsToRemove
+                }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error("[BLACK HOLE] Failed to remove rules:", chrome.runtime.lastError);
+                    } else {
+                        console.log(`[BLACK HOLE] Rules removed for ${domain} (IDs: ${idsToRemove.join(',')})`);
+                    }
+                });
+            } else {
+                console.warn(`[BLACK HOLE] No blocking rules found for ${domain}`);
+            }
+        });
     }
 });
 
