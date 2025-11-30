@@ -1,4 +1,5 @@
 import { FLAGS } from '../../common/constants.js';
+import { VectorMath, V_LABELS } from '../../learning/VectorMath.js';
 
 // Helper for decay logic
 function decayStats(entity) {
@@ -254,6 +255,9 @@ export class Planet {
         this.color = `hsl(${Math.random() * 360}, 70%, 50%)`;
         this.lastActive = Date.now();
         this.gravity = 0.2; // Default gravity
+        
+        // 2026 World Model Vector (Raw State)
+        this.vector = VectorMath.create();
     }
 
     cleanName(name) {
@@ -268,6 +272,7 @@ export class Planet {
     }
 
     ingestStats(data, aggregator) {
+        // 1. Update Scalar Stats (Legacy/Compat)
         if (data.flags & FLAGS.IS_REQUEST) {
             this.internalTraffic++;
             this.internalTrafficSize += data.size || 0;
@@ -285,6 +290,25 @@ export class Planet {
             this.samples.push(data.sample);
             if (this.samples.length > 5) this.samples.shift();
         }
+
+        // 2. Update Vector State (2026 Core)
+        // Map raw stats to vector indices.
+        // We update these raw values here; normalization happens in the Learning Engine (or Metric).
+        
+        // 0: IO_PACKET_RATE (Total Packets)
+        this.vector[0] = this.packetCount; 
+        
+        // 1: IO_VOLUME_SIZE (Total Bytes)
+        this.vector[1] = this.internalTrafficSize + this.externalTrafficSize;
+        
+        // 2: UPLOAD_RATIO (Internal / Total Count) - Calculated on read usually, but storing raw for now
+        // Let's store raw internal count here for vector math to normalize later
+        // Actually VectorMath expects 50 dims. We can use indices for Raw counts if we want.
+        // But better to store the *properties* if possible.
+        // For now, let's keep it sync with the scalars.
+        
+        // 7: LINGUISTIC_DENSITY (Token Total)
+        this.vector[7] = this.tokenTotal;
     }
 
     absorb(particle, aggregator) {

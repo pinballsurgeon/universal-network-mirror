@@ -141,33 +141,25 @@ class HeadlessViewer {
     tick() {
         this.playbackTime += 16; // 60fps sim
         
+        // 1. Ingest
+        this.physics.processBuffer(this.playbackTime, false);
+
+        // 2. Physics Update
         const context = {
             isPaused: false,
-            sunX: this.sunX,
-            sunY: this.sunY,
-            planets: this.planets,
             domainMap: this.reverseDomainMap, // Viewer expects Map<id, name>
             aggregator: this.aggregator
         };
+        this.physics.update(context);
 
-        // Update Planets
-        for (const [id, planet] of this.planets.entries()) {
-            const alive = planet.update(context);
-            if (!alive) this.planets.delete(id);
-        }
+        // 3. Get State
+        const state = this.physics.getState();
 
-        // Update Particles
-        for (let i = this.particles.length - 1; i >= 0; i--) {
-            const p = this.particles[i];
-            const alive = p.update(context);
-            if (!alive) this.particles.splice(i, 1);
-        }
-
-        // Collect Metrics
+        // 4. Collect Metrics
         const engineState = {
             time: this.playbackTime,
-            planets: this.planets,
-            particles: this.particles,
+            planets: state.planets,
+            particles: state.particles,
             viewMode: 'TRAFFIC',
             selectedObject: null,
             width: this.width,
@@ -204,8 +196,26 @@ async function runGauntlet(label, urls) {
             const p1 = extension.ingestPacket(url, 'GET', 'document', 500, startTime, '', {}, null, true);
             viewer.addParticle(p1);
             
-            const p2 = extension.ingestPacket(url, 'GET', 'document', size, startTime + duration, text, {}, null, false);
-            viewer.addParticle(p2);
+            // FEED CONTENT STREAM (Chunked Mode Verification)
+            const CHUNK_SIZE = 10000;
+            if (text.length > CHUNK_SIZE) {
+                console.log(`    Streaming ${Math.ceil(text.length/CHUNK_SIZE)} chunks...`);
+                for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+                    const chunk = text.substring(i, i + CHUNK_SIZE);
+                    const pChunk = extension.ingestPacket(
+                        url, 'GET', 'document', 
+                        chunk.length, 
+                        startTime + duration + (i/100), // Staggered arrival
+                        chunk, 
+                        { isIncremental: true, chunkIndex: i/CHUNK_SIZE }, 
+                        null, false
+                    );
+                    viewer.addParticle(pChunk);
+                }
+            } else {
+                const p2 = extension.ingestPacket(url, 'GET', 'document', size, startTime + duration, text, {}, null, false);
+                viewer.addParticle(p2);
+            }
 
             // Simple Parse for Resources (img, script, link)
             // This approximates the "cascade" of traffic
@@ -292,9 +302,73 @@ async function runGauntlet(label, urls) {
     // Consistency Check
     await runConsistencyCheck('https://www.wikipedia.org', 3);
 
+    // Vector Diagnostic (2026 World Model)
+    await runVectorDiagnostic();
+
     // Security Scan (Dev Signals)
     await runSecurityScan();
 })();
+
+// --- VECTOR DIAGNOSTIC (2026) ---
+async function runVectorDiagnostic() {
+    console.log(`\n=== RUNNING VECTOR DIAGNOSTIC: 2026 World Model ===`);
+    const extension = new HeadlessExtension();
+    const viewer = new HeadlessViewer(extension);
+    const startTime = Date.now();
+
+    // Scenario A: "Deep Work / Chat" (High Lingo, Low IO)
+    // - Lots of small text tokens
+    // - Low packet volume
+    const chatTokens = {}; // Object, not Map, for Object.entries() compatibility
+    for(let i=0; i<500; i++) chatTokens[`token_${i}`] = 1;
+    
+    const pChat = extension.ingestPacket(
+        'https://chat.openai.com/backend', 'POST', 'json', 
+        2000, startTime, 
+        '', 
+        { tokens: chatTokens }, // High unique tokens
+        null, true
+    );
+    viewer.addParticle(pChat);
+
+    // Scenario B: "Video Stream" (Low Lingo, High IO)
+    // - Huge packet
+    // - Zero tokens
+    const pVideo = extension.ingestPacket(
+        'https://netflix.com/stream', 'GET', 'media', 
+        5000000, startTime, 
+        '', 
+        {}, // No tokens
+        null, false
+    );
+    viewer.addParticle(pVideo);
+
+    // Settle
+    console.log("  Simulating 200 frames...");
+    for (let i = 0; i < 200; i++) viewer.tick();
+
+    // Analyze Vectors
+    const fps = viewer.projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints;
+    const chatPlanet = fps.find(f => f.name.includes('OPENAI'));
+    const videoPlanet = fps.find(f => f.name.includes('NETFLIX'));
+
+    if (!chatPlanet || !videoPlanet) {
+        console.log("  [FAIL] Planets not found.");
+        return;
+    }
+
+    console.log(`  [Chat Planet] LLM Likelihood: ${chatPlanet.metrics.llm_likelihood.toFixed(2)} (Target: > 0.8)`);
+    console.log(`  [Chat Planet] Text Entropy:   ${chatPlanet.metrics.text_entropy.toFixed(2)} (Target: > 0.8)`);
+    
+    console.log(`  [Video Planet] LLM Likelihood: ${videoPlanet.metrics.llm_likelihood.toFixed(2)} (Target: < 0.2)`);
+    console.log(`  [Video Planet] Text Entropy:   ${videoPlanet.metrics.text_entropy.toFixed(2)} (Target: < 0.2)`);
+
+    if (chatPlanet.metrics.llm_likelihood > 0.8 && videoPlanet.metrics.llm_likelihood < 0.2) {
+        console.log("  [PASS] Semantic Differentiation Successful.");
+    } else {
+        console.log("  [FAIL] Semantic Differentiation Failed.");
+    }
+}
 
 // --- SECURITY SCAN ---
 async function runSecurityScan() {
