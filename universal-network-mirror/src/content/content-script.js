@@ -104,7 +104,8 @@ const streamer = new TextStreamer();
 // --- DEEP FARMING LOGIC ---
 
 function isNoise(tagName) {
-    return ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'IMG', 'VIDEO', 'CANVAS', 'MAP', 'AREA'].includes(tagName);
+    // Removed VIDEO/CANVAS to ensure we catch overlays or HUDs drawn on top or inside
+    return ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'IMG', 'MAP', 'AREA'].includes(tagName);
 }
 
 // Recursive Harvester that pierces Shadow DOMs and Feeds Streamer
@@ -114,12 +115,14 @@ function deepHarvest(node) {
     // 1. Text Node
     if (node.nodeType === Node.TEXT_NODE) {
         const txt = node.nodeValue.trim();
-        if (txt.length >= 2) {
+        // Lowered threshold to 1 to capture single chars like "I" or numbers
+        if (txt.length >= 1) { 
             const p = node.parentNode;
             if (p) {
                 const tag = p.tagName;
                 if (!isNoise(tag)) {
-                    const isHeadline = ['H1','H2','H3','STRONG','B','TITLE'].includes(tag);
+                    // Boost YT-FORMATTED-STRING components
+                    const isHeadline = ['H1','H2','H3','STRONG','B','TITLE'].includes(tag) || tag.startsWith('YT-');
                     streamer.addText(txt, isHeadline);
                 }
             }
@@ -131,10 +134,20 @@ function deepHarvest(node) {
     if (node.nodeType === Node.ELEMENT_NODE) {
         if (isNoise(node.tagName)) return;
 
-        // SHADOW DOM PIERCING
-        if (node.shadowRoot && !observedRoots.has(node.shadowRoot)) {
-            attachObserver(node.shadowRoot);
+        // SHADOW DOM PIERCING (Aggressive)
+        if (node.shadowRoot) {
+            if (!observedRoots.has(node.shadowRoot)) {
+                attachObserver(node.shadowRoot);
+            }
+            // Always traverse shadow root to ensure we don't miss content due to observer races
             deepHarvest(node.shadowRoot);
+        }
+        
+        // Input Value Harvesting
+        if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
+            if (node.type !== 'password' && node.value && node.value.length > 0) {
+                streamer.addText(node.value, false);
+            }
         }
     }
 

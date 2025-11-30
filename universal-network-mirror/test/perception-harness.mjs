@@ -41,6 +41,8 @@ import { LinguisticAggregator } from '../src/viewer/aggregator.js';
 import { ProjectionCollector } from '../src/viewer/projections/ProjectionCollector.js';
 import { PhysicsEngine } from '../src/viewer/engine/PhysicsEngine.js';
 import { FLAGS } from '../src/common/constants.js';
+import { LearningEngine } from '../src/learning/LearningEngine.js';
+import { VectorMath } from '../src/learning/VectorMath.js';
 
 // --- HEADLESS EXTENSION BACKEND ---
 // Mimics background.js state and logic
@@ -305,9 +307,44 @@ async function runGauntlet(label, urls) {
     // Vector Diagnostic (2026 World Model)
     await runVectorDiagnostic();
 
+    // Learning Diagnostic (The Mind)
+    await runLearningDiagnostic();
+
     // Security Scan (Dev Signals)
     await runSecurityScan();
 })();
+
+// --- LEARNING DIAGNOSTIC (THE MIND) ---
+async function runLearningDiagnostic() {
+    console.log(`\n=== RUNNING LEARNING DIAGNOSTIC: Centroid Classifier ===`);
+    const brain = new LearningEngine();
+    
+    // 1. Test "Deep Work" Vector
+    const deepVec = VectorMath.create();
+    deepVec.fill(0.5); // Baseline
+    deepVec[7] = 0.95; // LINGUISTIC_DENSITY (High)
+    deepVec[9] = 0.85; // TEXT_ENTROPY (High)
+    deepVec[0] = 0.1;  // IO_PACKET_RATE (Low)
+    
+    const result1 = brain.classify(deepVec);
+    console.log(`  [Deep Work Sim] Prediction: ${result1.mode} (${(result1.confidence*100).toFixed(1)}%)`);
+    
+    if (result1.mode === 'DEEP_WORK') console.log("  [PASS] Correctly identified Deep Work.");
+    else console.log(`  [FAIL] Expected DEEP_WORK, got ${result1.mode}`);
+
+    // 2. Test "Doomscrolling" Vector
+    const doomVec = VectorMath.create();
+    doomVec.fill(0.5);
+    doomVec[7] = 0.2;  // LINGUISTIC_DENSITY (Low)
+    doomVec[0] = 0.95; // IO_PACKET_RATE (High)
+    doomVec[6] = 0.9;  // SPRAWL_SCORE (High)
+    
+    const result2 = brain.classify(doomVec);
+    console.log(`  [Doomscroll Sim] Prediction: ${result2.mode} (${(result2.confidence*100).toFixed(1)}%)`);
+    
+    if (result2.mode === 'DOOMSCROLLING') console.log("  [PASS] Correctly identified Doomscrolling.");
+    else console.log(`  [FAIL] Expected DOOMSCROLLING, got ${result2.mode}`);
+}
 
 // --- VECTOR DIAGNOSTIC (2026) ---
 async function runVectorDiagnostic() {

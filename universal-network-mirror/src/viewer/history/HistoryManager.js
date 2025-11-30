@@ -83,6 +83,60 @@ export class HistoryManager {
         return result.map(v => v / max);
     }
 
+    getStoryline(bins = 100) {
+        if (this.tape.length === 0) return new Array(bins).fill(null);
+        const start = this.getStartTime();
+        const duration = this.getDuration();
+        const binSize = duration / bins;
+        const result = new Array(bins).fill(null);
+
+        // Temp storage for mode voting per bin
+        const binVotes = new Array(bins).fill(null).map(() => ({}));
+
+        for (const tick of this.tape) {
+            const bucket = Math.min(bins - 1, Math.floor((tick.ts - start) / binSize));
+            
+            // Track Density
+            if (!result[bucket]) result[bucket] = { density: 0, mode: 'UNKNOWN', color: '#555' };
+            result[bucket].density += tick.particleCount || 0;
+
+            // Track Mode Votes
+            if (tick.prediction && tick.prediction.mode) {
+                const m = tick.prediction.mode;
+                binVotes[bucket][m] = (binVotes[bucket][m] || 0) + 1;
+            }
+        }
+
+        // Resolve Modes
+        const maxDensity = Math.max(1, ...result.map(r => r ? r.density : 0));
+        
+        for (let i = 0; i < bins; i++) {
+            if (result[i]) {
+                // Normalize density
+                result[i].density /= maxDensity;
+                
+                // Find winner
+                let winner = 'UNKNOWN';
+                let maxVote = -1;
+                const votes = binVotes[i];
+                if (votes) {
+                    for (const [mode, count] of Object.entries(votes)) {
+                        if (count > maxVote) {
+                            maxVote = count;
+                            winner = mode;
+                        }
+                    }
+                }
+                result[i].mode = winner;
+                // We rely on RenderEngine to map Mode -> Color, or store it in tick. 
+                // Tick has prediction.color!
+                // Let's grab color from the last tick in bucket (approximate)
+                // Or better, just return mode and let RenderEngine decide visuals.
+            }
+        }
+        return result;
+    }
+
     // --- LONG TERM HISTORY (PERSISTENCE) ---
 
     loadHistory() {

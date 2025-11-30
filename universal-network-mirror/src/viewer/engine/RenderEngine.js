@@ -37,23 +37,37 @@ export class RenderEngine {
         const totalDuration = historyEndTime - historyStartTime;
         if (totalDuration <= 0) return;
 
-        // --- ACTIVITY HEATMAP (Adobe Premiere Style) ---
-        // Use historyManager to get aggregated activity density
-        // We map the *entire* history buffer to the screen width
+        // --- STORYLINE SCRUBBER (2026 UX) ---
+        // Visualizes density AND semantic mode
         
-        const heatmap = this.historyManager.getActivityHeatmap(100); // 100 bins
-        const binWidth = this.width / heatmap.length;
+        const storyline = this.historyManager.getStoryline(100); // 100 bins
+        const binWidth = this.width / storyline.length;
         
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, this.height);
-        
-        heatmap.forEach((val, i) => {
-            const h = val * (this.TIMELINE_HEIGHT - 10);
+        const MODE_COLORS = {
+            'DEEP_WORK': '#00ffcc',
+            'DOOMSCROLLING': '#ff0055',
+            'MEDIA_IMMERSION': '#aa00ff',
+            'DEV_MODE': '#ffff00',
+            'UNKNOWN': '#444444'
+        };
+
+        storyline.forEach((segment, i) => {
+            if (!segment) return;
+            
+            const h = Math.max(2, segment.density * (this.TIMELINE_HEIGHT - 10));
             const bx = i * binWidth;
             const by = this.height - h;
             
-            this.ctx.fillStyle = `hsl(${180 + val * 60}, 100%, 50%)`; // Cyan to Blue/Purple
+            // Mode Color
+            this.ctx.fillStyle = MODE_COLORS[segment.mode] || MODE_COLORS.UNKNOWN;
             this.ctx.fillRect(bx, by, binWidth - 1, h);
+            
+            // Draw Mode Label if it changes (Transition)
+            if (i > 0 && storyline[i-1] && storyline[i-1].mode !== segment.mode && segment.density > 0.1) {
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '9px monospace';
+                this.ctx.fillText(segment.mode, bx, this.height - this.TIMELINE_HEIGHT - 5);
+            }
         });
 
         // Playhead
@@ -104,5 +118,26 @@ export class RenderEngine {
         this.ctx.globalCompositeOperation = 'source-over';
 
         this.drawSun(sunX, sunY);
+        
+        // --- HUD OVERLAY (Current Mode) ---
+        if (projectionTick && projectionTick.prediction) {
+            const { mode, confidence, color } = projectionTick.prediction;
+            
+            // Top Center Badge
+            this.ctx.textAlign = 'center';
+            this.ctx.font = 'bold 16px monospace';
+            
+            // Glow
+            this.ctx.shadowColor = color;
+            this.ctx.shadowBlur = 10;
+            this.ctx.fillStyle = color;
+            this.ctx.fillText(`[ ${mode} ]`, this.width / 2, 30);
+            
+            this.ctx.font = '12px monospace';
+            this.ctx.fillStyle = '#aaa';
+            this.ctx.fillText(`CONFIDENCE: ${(confidence * 100).toFixed(0)}%`, this.width / 2, 50);
+            
+            this.ctx.shadowBlur = 0; // Reset
+        }
     }
 }

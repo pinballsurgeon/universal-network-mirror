@@ -6,6 +6,8 @@ import { PhysicsEngine } from './engine/PhysicsEngine.js';
 import { RenderEngine } from './engine/RenderEngine.js';
 import { UIManager } from './ui/UIManager.js';
 import { Planet, BlackHole } from './engine/Entities.js';
+import { LearningEngine } from '../learning/LearningEngine.js';
+import { VectorMath } from '../learning/VectorMath.js';
 
 // --- INITIALIZATION ---
 const canvas = document.getElementById('canvas');
@@ -15,6 +17,7 @@ const physicsEngine = new PhysicsEngine(canvas.width, canvas.height);
 const uiManager = new UIManager();
 const aggregator = new LinguisticAggregator();
 const projectionCollector = new ProjectionCollector();
+const learningEngine = new LearningEngine();
 
 // --- STATE ---
 let domainMap = new Map(); 
@@ -377,7 +380,41 @@ function loop() {
     uiManager.updateStats(60, physicsState.particles.length, physicsState.planets.size);
     uiManager.updateTime(isLive);
 
-    // 5. Metrics & Projection
+    // 5. Intelligence (The Mind)
+    // Compute Global Slice Vector
+    const sliceVector = VectorMath.create();
+    let totalWeight = 0;
+    
+    for (const p of physicsState.planets.values()) {
+        const weight = p.mass; // Use mass as importance weight
+        VectorMath.scale(p.vector, p.vector, 1); // Ensure we have the vector (it's updated in Entities.js)
+        // Accumulate: slice += planet_vec * weight
+        // We need a temp vector for scaling to not mutate planet vector
+        // Optimization: In JS just multiply in loop for V1
+        for(let i=0; i<sliceVector.length; i++) {
+            sliceVector[i] += p.vector[i] * weight;
+        }
+        totalWeight += weight;
+    }
+    
+    if (totalWeight > 0) {
+        // Normalize by total weight to get average
+        for(let i=0; i<sliceVector.length; i++) {
+            sliceVector[i] /= totalWeight;
+        }
+    }
+
+    // Classify
+    const prediction = learningEngine.classify(sliceVector);
+    
+    // Update Systems
+    // renderEngine.setMode(prediction); // Need to implement
+    // uiManager.updateMode(prediction); // Need to implement
+    
+    // Store in History for Scrubber
+    // historyManager.pushSlice(playbackTime, prediction); // Need to implement
+
+    // 6. Metrics & Projection
     // Collect stats for external validation (Cline / Tests)
     const engineState = {
         time: playbackTime,
@@ -387,7 +424,8 @@ function loop() {
         selectedObject,
         width: canvas.width,
         height: canvas.height,
-        aggregator
+        aggregator,
+        prediction // Broadcast intelligence
     };
     projectionCollector.collectAndBroadcast(engineState);
     
