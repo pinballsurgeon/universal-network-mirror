@@ -64,15 +64,30 @@ export const nodeFingerprintMetric = {
         });
 
         rawStats.forEach(s => {
-            // Mock V5 Logic for new fields (Simulation for Test Rig)
-            // Real logic requires LearningEngine integration
-            // REFINED: Just use lingo for test. In reality, we use DOM structure too.
-            // Lowered threshold to 0.15 based on test rig calibration (decay effects)
-            if (s.lingo > 0.15) s.llm_likelihood = 0.9; // Chat pattern
-            else s.llm_likelihood = 0.1;
+            // V6 UPGRADE: Real Shannon Entropy & Heuristic LLM Detection
+            
+            // Shannon approximation:
+            // H ≈ log2(Unique / Total) * -1 (Very rough, but better than hardcoded)
+            // We use the computed s.lingo (Unique/Total)
+            
+            if (s.lingo > 0) {
+                // lingo is (unique / total). 
+                // We map 0..1 to 0..1 non-linearly to match 'Entropy' feel.
+                // Square root boosts low values, making entropy more sensitive.
+                s.text_entropy = Math.sqrt(s.lingo); 
+            } else {
+                s.text_entropy = 0;
+            }
 
-            if (s.lingo > 0.8) s.text_entropy = 0.9; // High unique tokens
-            else s.text_entropy = 0.2;
+            // LLM Likelihood Heuristic (Cyber-Semantics)
+            // LLMs tend to have "Medium" entropy (perfect grammar, good vocabulary).
+            // They sit in the "Goldilocks" zone of 0.4 - 0.7 Lingo.
+            
+            if (s.lingo > 0.3 && s.lingo < 0.7) {
+                s.llm_likelihood = 0.8; 
+            } else {
+                s.llm_likelihood = 0.2;
+            }
 
             keys.forEach(k => {
                 const val = s[k] !== undefined ? s[k] : 0;

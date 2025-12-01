@@ -80,77 +80,74 @@ chrome.runtime.sendMessage({ type: 'QUERY_BUFFER' }, (response) => {
 function loadBlackHoles() {
     chrome.storage.local.get(['blackHoles'], (result) => {
         if (result.blackHoles) {
-            const domainIds = [];
-            // We need domain IDs. But domainMap is loaded async.
-            // Wait for domainMap to be populated? 
-            // Or just do best effort matching if we have names.
-            
-            // Actually, we need the ID to key the Map.
-            // If the domainMap doesn't have it (because we restarted and haven't seen traffic yet),
-            // we might not have an ID.
-            // BUT, `background.js` persists `domainMap` too!
-            // `viewer.js` loads `domainMap` on line 43.
-            
             // Let's retry if domainMap is empty.
             if (domainMap.size === 0) {
                 setTimeout(loadBlackHoles, 1000);
                 return;
             }
 
-            Object.keys(result.blackHoles).forEach(domain => {
-                // Find ID from reverse map (which is loaded from storage)
-                // reverseMap is actually Map<id, name> -> domainMap is Map<id, name> (WAIT)
-                // loadDomainMap logic:
-                // reverseDomainMap = new Map(Object.entries(result.domainMap)); // id (string) -> name
-                // domainMap = new Map(); for... domainMap.set(id, name);
-                // Wait, logic in viewer.js lines 43-49:
-                /* 
-                reverseDomainMap = new Map(Object.entries(result.domainMap));
-                domainMap = new Map();
-                for (let [name, id] of reverseDomainMap) { // Object.entries gives [key, value] where key is string index?
-                   // In background.js: domainMap is Map<hostname, id>.
-                   // Object.entries(map) -> [ [hostname, id], ... ]
-                   // So result.domainMap is { hostname: id }.
-                   // reverseDomainMap = new Map([ [hostname, id] ]) -> key=hostname, value=id.
-                */
+            Object.keys(result.blackHoles).forEach(blockedDomain => {
+               // Robust Lookup: Find all domain IDs that match this blocked domain
+               // E.g. blocked="google.com", matches "www.google.com", "mail.google.com"
+               const matchedIds = [];
                
-               // So `reverseDomainMap` in viewer.js is actually `Map<Hostname, ID>`.
-               // The variable naming in viewer.js is confusing or I misread it.
-               /*
-                chrome.storage.local.get(['domainMap'], (result) => {
-                    if (result.domainMap) {
-                        reverseDomainMap = new Map(Object.entries(result.domainMap)); // Hostname -> ID
-                        domainMap = new Map(); // ID -> Hostname
-                        for (let [name, id] of reverseDomainMap) {
-                            domainMap.set(Number(id), name);
-                        }
-                    }
-                });
-               */
+               // Exact match
+               if (reverseDomainMap.has(blockedDomain)) {
+                   matchedIds.push(reverseDomainMap.get(blockedDomain));
+               }
                
-               // Okay, so `reverseDomainMap` is Hostname->ID.
-               const id = reverseDomainMap.get(domain);
-               if (id) {
-                   const numId = Number(id);
-                   if (!physicsEngine.planets.has(numId)) {
-                        // Create BlackHole
-                        // We don't have a previous planet to copy from.
-                        // Create a dummy planet then convert.
-                        const dummy = new Planet(numId, domain, physicsEngine.sunX, physicsEngine.sunY);
-                        // Randomize position slightly to avoid stacking if multiple
+               // Subdomain match (Scan all domains)
+               for (const [hostname, id] of reverseDomainMap.entries()) {
+                   if (hostname.endsWith('.' + blockedDomain) || hostname === blockedDomain) {
+                       if (!matchedIds.includes(id)) matchedIds.push(id);
+                   }
+               }
+
+               if (matchedIds.length > 0) {
+                   matchedIds.forEach(id => {
+                       const numId = Number(id);
+                       // Retrieve name for dummy creation
+                       const hostname = domainMap.get(numId) || blockedDomain;
+                       
+                       if (!physicsEngine.planets.has(numId)) {
+                            // Create BlackHole from scratch
+                            const dummy = new Planet(numId, hostname, physicsEngine.sunX, physicsEngine.sunY);
+                            // Randomize position slightly to avoid stacking if multiple
+                            dummy.angle = Math.random() * Math.PI * 2;
+                            dummy.distance = 200 + Math.random() * 200;
+                            
+                            const bh = new BlackHole(dummy);
+                            physicsEngine.planets.set(numId, bh);
+                            console.log(`[BLACK HOLE] Restored ${hostname} (Rule: ${blockedDomain})`);
+                       } else {
+                           // Convert existing planet
+                           const existing = physicsEngine.planets.get(numId);
+                           if (!(existing instanceof BlackHole)) {
+                               const bh = new BlackHole(existing);
+                               physicsEngine.planets.set(numId, bh);
+                               console.log(`[BLACK HOLE] Converted ${hostname} (Rule: ${blockedDomain})`);
+                           }
+                       }
+                   });
+               } else {
+                   // Fallback for "Cold" Black Holes (Not in DomainMap)
+                   // We must render them so they can be managed/unblocked.
+                   // Use a synthetic negative ID based on string hash to remain consistent
+                   let hash = 0;
+                   for (let i = 0; i < blockedDomain.length; i++) {
+                       hash = ((hash << 5) - hash) + blockedDomain.charCodeAt(i);
+                       hash |= 0;
+                   }
+                   const syntheticId = -Math.abs(hash || 1); // Ensure negative
+                   
+                   if (!physicsEngine.planets.has(syntheticId)) {
+                        const dummy = new Planet(syntheticId, blockedDomain, physicsEngine.sunX, physicsEngine.sunY);
                         dummy.angle = Math.random() * Math.PI * 2;
-                        dummy.distance = 200 + Math.random() * 200;
+                        dummy.distance = 300 + Math.random() * 200; // Push them out slightly
                         
                         const bh = new BlackHole(dummy);
-                        physicsEngine.planets.set(numId, bh);
-                        console.log(`[BLACK HOLE] Restored ${domain} from storage.`);
-                   } else {
-                       // Already exists (maybe from buffer), convert it
-                       const existing = physicsEngine.planets.get(numId);
-                       if (!(existing instanceof BlackHole)) {
-                           const bh = new BlackHole(existing);
-                           physicsEngine.planets.set(numId, bh);
-                       }
+                        physicsEngine.planets.set(syntheticId, bh);
+                        console.log(`[BLACK HOLE] Restored COLD ${blockedDomain} (ID: ${syntheticId})`);
                    }
                }
             });

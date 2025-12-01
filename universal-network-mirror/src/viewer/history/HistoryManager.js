@@ -140,7 +140,7 @@ export class HistoryManager {
     // --- LONG TERM HISTORY (PERSISTENCE) ---
 
     loadHistory() {
-        chrome.storage.local.get(['domainStats', 'domainSnapshots'], (result) => {
+        chrome.storage.local.get(['domainStats', 'domainSnapshots', 'historyTape'], (result) => {
             if (result.domainStats) {
                 try {
                     Object.entries(result.domainStats).forEach(([k, v]) => this.domainStats.set(k, v));
@@ -150,6 +150,13 @@ export class HistoryManager {
                 try {
                     Object.entries(result.domainSnapshots).forEach(([k, v]) => this.snapshots.set(k, v));
                 } catch (e) { console.error("Failed to load snapshots", e); }
+            }
+            // V6 UPGRADE: Restore Tape
+            if (result.historyTape && Array.isArray(result.historyTape)) {
+                try {
+                    this.tape = result.historyTape;
+                    console.log(`[HistoryManager] Restored ${this.tape.length} frames from Chronosphere.`);
+                } catch (e) { console.error("Failed to load tape", e); }
             }
         });
     }
@@ -182,9 +189,11 @@ export class HistoryManager {
     saveHistory() {
         const objStats = Object.fromEntries(this.domainStats);
         const objSnaps = Object.fromEntries(this.snapshots);
+        // V6 UPGRADE: Persist Tape
         chrome.storage.local.set({ 
             domainStats: objStats,
-            domainSnapshots: objSnaps
+            domainSnapshots: objSnaps,
+            historyTape: this.tape
         });
     }
 
