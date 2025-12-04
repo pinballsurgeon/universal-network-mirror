@@ -118,7 +118,7 @@ function deepHarvest(node) {
         // Lowered threshold to 1 to capture single chars like "I" or numbers
         if (txt.length >= 1) { 
             const p = node.parentNode;
-            if (p) {
+            if (p && p.tagName) {
                 const tag = p.tagName;
                 if (!isNoise(tag)) {
                     // Boost YT-FORMATTED-STRING components
@@ -180,6 +180,8 @@ function attachObserver(targetNode) {
     if (observedRoots.has(targetNode)) return;
     observedRoots.add(targetNode);
 
+    let lastExtractionTime = Date.now();
+
     const observer = new MutationObserver((mutations) => {
         let hasWork = false;
         mutations.forEach(m => {
@@ -195,8 +197,20 @@ function attachObserver(targetNode) {
         });
 
         if (hasWork) {
+            const now = Date.now();
             clearTimeout(extractionTimer);
-            extractionTimer = setTimeout(processQueue, 1000); // Debounce
+            
+            // Starvation Protection: If we haven't extracted in 2 seconds due to constant updates,
+            // force a harvest now to ensure we don't lose content on busy sites (like NBA.com).
+            if (now - lastExtractionTime > 2000) {
+                processQueue();
+                lastExtractionTime = now;
+            } else {
+                extractionTimer = setTimeout(() => {
+                    processQueue();
+                    lastExtractionTime = Date.now();
+                }, 1000); // Debounce
+            }
         }
     });
 

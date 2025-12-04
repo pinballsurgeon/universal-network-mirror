@@ -12,7 +12,7 @@
 export class HistoryManager {
     constructor() {
         this.tape = []; // The active timeline
-        this.maxTapeLength = 10000; // Keep 15 mins approx in RAM at 10Hz
+        this.maxTapeLength = 3600; // Keep 60 mins at 1Hz (Lofi Protocol)
         this.isRecording = true;
         
         // Long-term stats: "google.com" -> { metrics: {...}, count: 100, lastSeen: ts }
@@ -30,15 +30,41 @@ export class HistoryManager {
     push(tick) {
         if (!this.isRecording) return;
 
-        // Compression 1: Skip completely empty ticks if previous was also empty?
-        this.tape.push(tick);
+        // Compression 1: Temporal Throttling is handled in Viewer.js (1Hz)
+        
+        // Compression 2: Semantic Stripping (Data Diet)
+        // Manual shallow copy to avoid JSON overhead and strip aggressively
+        const leanTick = {
+            ts: tick.ts,
+            particleCount: tick.particleCount,
+            metrics: {}
+        };
+
+        if (tick.metrics && tick.metrics.node_fingerprint) {
+            leanTick.metrics.node_fingerprint = {
+                fingerPrints: tick.metrics.node_fingerprint.fingerPrints.map(fp => ({
+                    domainId: fp.domainId,
+                    // name: fp.name, // STRIPPED: Name can be looked up via DomainMap
+                    metrics: fp.metrics 
+                    // vector: STRIPPED
+                }))
+            };
+        }
+        // Copy other metrics if they exist (e.g. global stats)
+        for (const k in tick.metrics) {
+            if (k !== 'node_fingerprint') {
+                leanTick.metrics[k] = tick.metrics[k];
+            }
+        }
+
+        this.tape.push(leanTick);
 
         if (this.tape.length > this.maxTapeLength) {
             this.tape.shift(); 
         }
 
-        // Periodic Save of Fingerprints (every 10s)
-        if (Date.now() - this.lastSave > 10000) {
+        // Periodic Save of Fingerprints (Optimized: every 60s to prevent UI freeze)
+        if (Date.now() - this.lastSave > 60000) {
             this.saveHistory();
             this.lastSave = Date.now();
         }
@@ -193,7 +219,7 @@ export class HistoryManager {
         chrome.storage.local.set({ 
             domainStats: objStats,
             domainSnapshots: objSnaps,
-            historyTape: this.tape
+            // historyTape: this.tape // DISABLED FOR PERFORMANCE TESTING (Causes Lag/Freezing)
         });
     }
 

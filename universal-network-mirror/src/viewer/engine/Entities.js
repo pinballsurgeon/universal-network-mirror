@@ -374,7 +374,7 @@ export class Planet {
         return true;
     }
 
-    draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fingerprint) {
+    draw(ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fingerprint, quality = 'HIGH') {
         ctx.beginPath();
         if (this.bloatScore > 500) {
             for (let i = 0; i < Math.PI * 2; i += 0.5) {
@@ -403,8 +403,8 @@ export class Planet {
         ctx.fill();
         ctx.globalAlpha = 1.0;
 
-        // Draw Fingerprint Equalizer
-        if (fingerprint) {
+        // Draw Fingerprint Equalizer (Skip in LOW quality)
+        if (fingerprint && quality !== 'LOW') {
             drawEqualizer(ctx, this.x, this.y, this.radius, fingerprint);
         }
 

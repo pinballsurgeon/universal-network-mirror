@@ -301,4 +301,22 @@ export class LinguisticAggregator {
             }
         }
     }
+
+    // New V6 Maintenance: Prune stale planet states to prevent memory leaks
+    // caused by infinite accumulation of dead domain histories.
+    prune(activePlanetKeys) {
+        const activeSet = new Set(activePlanetKeys);
+        for (const key of this.planetTopicState.keys()) {
+            if (!activeSet.has(key)) {
+                this.planetTopicState.delete(key);
+            }
+        }
+        // Also ensure global stats don't grow infinitely if mostly junk
+        if (this.globalTokens.size > 20000) {
+            // Emergency trim of low-frequency global tokens
+            for (const [t, count] of this.globalTokens.entries()) {
+                if (count < 1.0) this.globalTokens.delete(t);
+            }
+        }
+    }
 }

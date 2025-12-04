@@ -43,7 +43,7 @@ export class UIManager {
         this.blackHoleInspector = document.getElementById('blackhole-inspector');
         this.blackHoleList = document.getElementById('blackhole-list');
         this.btnCloseBH = document.getElementById('btn-close-bh');
-        this.btnToggleVoid = document.getElementById('btn-toggle-void');
+        this.checkToggleVoid = document.getElementById('check-toggle-void'); // V6: Toggle Switch
 
         // Snapshot UI
         this.btnSnapshot = document.getElementById('btn-snapshot');
@@ -93,17 +93,12 @@ export class UIManager {
             });
         }
 
-        if (this.btnToggleVoid && onToggleVoid) {
-            this.btnToggleVoid.addEventListener('click', () => {
-                const isActive = this.btnToggleVoid.classList.contains('active');
-                if (isActive) {
-                    this.btnToggleVoid.classList.remove('active');
-                    this.btnToggleVoid.innerText = "SHOW VOID";
-                } else {
-                    this.btnToggleVoid.classList.add('active');
-                    this.btnToggleVoid.innerText = "HIDE VOID";
-                }
-                onToggleVoid(!isActive);
+        if (this.checkToggleVoid && onToggleVoid) {
+            // Set initial state (should be false/unchecked by default from HTML/viewer.js)
+            this.checkToggleVoid.checked = false; 
+            
+            this.checkToggleVoid.addEventListener('change', (e) => {
+                onToggleVoid(e.target.checked);
             });
         }
 

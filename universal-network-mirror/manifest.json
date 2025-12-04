@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Universal Network Mirror",
+  "name": "graviKey",
   "version": "1.0.0",
-  "description": "A Lossless, Rewindable, 4D Solar System of your digital life.",
+  "description": "Absolute local, private network world model, for analyzing and controlling your digital experiences.",
   "permissions": [
     "webRequest",
     "declarativeNetRequest",

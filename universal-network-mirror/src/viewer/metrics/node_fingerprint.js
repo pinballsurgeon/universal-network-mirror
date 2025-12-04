@@ -117,7 +117,9 @@ export const nodeFingerprintMetric = {
                 domainId: s.id,
                 name: s.name,
                 metrics: norm,
-                vector: vector
+                // Serialize Float32Array to regular Array to ensure JSON compatibility
+                // for chrome.storage and message passing.
+                vector: Array.from(vector)
             };
         });
 

@@ -8,6 +8,7 @@ import { UIManager } from './ui/UIManager.js';
 import { Planet, BlackHole } from './engine/Entities.js';
 import { LearningEngine } from '../learning/LearningEngine.js';
 import { VectorMath } from '../learning/VectorMath.js';
+import { ResourceMonitor, HealthState } from '../common/ResourceMonitor.js';
 
 // --- INITIALIZATION ---
 const canvas = document.getElementById('canvas');
@@ -18,19 +19,44 @@ const uiManager = new UIManager();
 const aggregator = new LinguisticAggregator();
 const projectionCollector = new ProjectionCollector();
 const learningEngine = new LearningEngine();
+const resourceMonitor = new ResourceMonitor();
 
 // --- STATE ---
 let domainMap = new Map(); 
 let reverseDomainMap = new Map(); 
 let selectedObject = null;
+let currentHealthState = HealthState.GREEN;
 
 let historyStartTime = Date.now();
 let historyEndTime = Date.now();
 let playbackTime = Date.now();
+let lastHistoryPush = 0; // Throttling
+let lastPrune = 0; // Aggregator pruning
 let isLive = true;
 let isPaused = false;
 let viewMode = 'TRAFFIC'; // 'TRAFFIC' or 'LINGUISTIC'
-let showBlackHoles = true;
+let showBlackHoles = false; // Hidden by default (User Request)
+
+// --- RESOURCE GOVERNANCE ---
+resourceMonitor.addListener((report) => {
+    // Adaptive Logic
+    currentHealthState = report.state;
+    
+    // Adjust Engine Limits
+    if (report.state === HealthState.GREEN) {
+        physicsEngine.setParticleLimit(1000);
+        renderEngine.setQuality('HIGH');
+    } else if (report.state === HealthState.YELLOW) {
+        physicsEngine.setParticleLimit(200);
+        renderEngine.setQuality('MEDIUM');
+    } else {
+        physicsEngine.setParticleLimit(50);
+        renderEngine.setQuality('LOW');
+        // Force GC if possible by clearing arrays?
+    }
+    
+    console.log(`[Health] ${report.state} | FPS: ${report.fps} | Heap: ${report.heap}MB`);
+});
 
 function resize() {
     const w = window.innerWidth;
@@ -86,53 +112,57 @@ function loadBlackHoles() {
                 return;
             }
 
-            Object.keys(result.blackHoles).forEach(blockedDomain => {
-               // Robust Lookup: Find all domain IDs that match this blocked domain
-               // E.g. blocked="google.com", matches "www.google.com", "mail.google.com"
-               const matchedIds = [];
-               
-               // Exact match
-               if (reverseDomainMap.has(blockedDomain)) {
-                   matchedIds.push(reverseDomainMap.get(blockedDomain));
-               }
-               
-               // Subdomain match (Scan all domains)
-               for (const [hostname, id] of reverseDomainMap.entries()) {
-                   if (hostname.endsWith('.' + blockedDomain) || hostname === blockedDomain) {
-                       if (!matchedIds.includes(id)) matchedIds.push(id);
-                   }
-               }
-
-               if (matchedIds.length > 0) {
-                   matchedIds.forEach(id => {
-                       const numId = Number(id);
-                       // Retrieve name for dummy creation
-                       const hostname = domainMap.get(numId) || blockedDomain;
-                       
-                       if (!physicsEngine.planets.has(numId)) {
+            const blackHoles = result.blackHoles;
+            const matchedRules = new Set();
+            
+            // OPTIMIZED LOOKUP: O(Visited * Depth) instead of O(Visited * Blocked)
+            // Iterate visited domains once and check against blackHoles keys
+            for (const [hostname, id] of reverseDomainMap.entries()) {
+                const parts = hostname.split('.');
+                // Check all sub-parts: "mail.google.com" -> "mail.google.com", "google.com", "com"
+                // Usually we just care about "google.com" (root) or full match.
+                // Scan from full length down to 2 parts.
+                
+                let current = hostname;
+                let foundMatch = false;
+                
+                // Optimized suffix check
+                // We construct potential rules from the hostname
+                for (let i = 0; i < parts.length - 1; i++) {
+                    const ruleCandidate = parts.slice(i).join('.');
+                    if (blackHoles[ruleCandidate]) {
+                        // HIT!
+                        matchedRules.add(ruleCandidate);
+                        const numId = Number(id);
+                        
+                        // Convert/Create BlackHole
+                        if (!physicsEngine.planets.has(numId)) {
                             // Create BlackHole from scratch
                             const dummy = new Planet(numId, hostname, physicsEngine.sunX, physicsEngine.sunY);
-                            // Randomize position slightly to avoid stacking if multiple
                             dummy.angle = Math.random() * Math.PI * 2;
                             dummy.distance = 200 + Math.random() * 200;
                             
                             const bh = new BlackHole(dummy);
                             physicsEngine.planets.set(numId, bh);
-                            console.log(`[BLACK HOLE] Restored ${hostname} (Rule: ${blockedDomain})`);
-                       } else {
+                        } else {
                            // Convert existing planet
                            const existing = physicsEngine.planets.get(numId);
                            if (!(existing instanceof BlackHole)) {
                                const bh = new BlackHole(existing);
                                physicsEngine.planets.set(numId, bh);
-                               console.log(`[BLACK HOLE] Converted ${hostname} (Rule: ${blockedDomain})`);
                            }
-                       }
-                   });
-               } else {
+                        }
+                        foundMatch = true;
+                        break; // Stop checking other suffixes if blocked
+                    }
+                }
+            }
+
+            // Restore "Cold" Black Holes (Rules not matched by any visited domain)
+            Object.keys(blackHoles).forEach(blockedDomain => {
+                if (!matchedRules.has(blockedDomain)) {
                    // Fallback for "Cold" Black Holes (Not in DomainMap)
                    // We must render them so they can be managed/unblocked.
-                   // Use a synthetic negative ID based on string hash to remain consistent
                    let hash = 0;
                    for (let i = 0; i < blockedDomain.length; i++) {
                        hash = ((hash << 5) - hash) + blockedDomain.charCodeAt(i);
@@ -143,14 +173,15 @@ function loadBlackHoles() {
                    if (!physicsEngine.planets.has(syntheticId)) {
                         const dummy = new Planet(syntheticId, blockedDomain, physicsEngine.sunX, physicsEngine.sunY);
                         dummy.angle = Math.random() * Math.PI * 2;
-                        dummy.distance = 300 + Math.random() * 200; // Push them out slightly
+                        dummy.distance = 300 + Math.random() * 200; 
                         
                         const bh = new BlackHole(dummy);
                         physicsEngine.planets.set(syntheticId, bh);
                         console.log(`[BLACK HOLE] Restored COLD ${blockedDomain} (ID: ${syntheticId})`);
                    }
-               }
+                }
             });
+            console.log(`[BLACK HOLE] Restoration Complete. Matched ${matchedRules.size} rules.`);
         }
     });
 }
@@ -331,13 +362,15 @@ canvas.addEventListener('mousedown', (e) => {
 function loop() {
     requestAnimationFrame(loop);
 
+    const now = Date.now();
+
     // 1. Time & Data Processing
     if (!isPaused) {
         aggregator.decayGlobalTokens();
     }
 
     if (isLive && !isPaused) {
-        playbackTime = Date.now() - 500;
+        playbackTime = now - 500;
         historyEndTime = Math.max(historyEndTime, playbackTime);
     } else if (!isPaused) {
         playbackTime += 16; 
@@ -426,15 +459,26 @@ function loop() {
     };
     projectionCollector.collectAndBroadcast(engineState);
     
-    // Save to History Tape
+    // Save to History Tape (Throttled)
     if (projectionCollector.lastTick) {
-        const lastRecorded = historyManager.tape.length > 0 ? historyManager.tape[historyManager.tape.length-1] : null;
-        if (!lastRecorded || lastRecorded.ts !== projectionCollector.lastTick.ts) {
+        // V6 Optimization: Only push 1Hz (every 1 second) to history
+        // ADAPTIVE: If RED state, disable history recording entirely to save RAM
+        const interval = currentHealthState === HealthState.RED ? Infinity : 1000;
+        
+        if (now - lastHistoryPush > interval) {
             historyManager.push(projectionCollector.lastTick);
             if (projectionCollector.lastTick.metrics.node_fingerprint) {
                 historyManager.updateFingerprints(projectionCollector.lastTick.metrics.node_fingerprint.fingerPrints);
             }
+            lastHistoryPush = now;
         }
+    }
+
+    // Prune Aggregator (Every 5 seconds) to prevent infinite memory growth from dead planets
+    if (now - lastPrune > 5000) {
+        const activeKeys = physicsEngine.planets.keys();
+        aggregator.prune(activeKeys);
+        lastPrune = now;
     }
 }
 

@@ -8,6 +8,12 @@ export class RenderEngine {
         this.width = canvas.width;
         this.height = canvas.height;
         this.TIMELINE_HEIGHT = 80;
+        this.quality = 'HIGH'; // HIGH, MEDIUM, LOW
+    }
+
+    setQuality(q) {
+        this.quality = q;
+        // console.log(`[RenderEngine] Quality set to ${q}`);
     }
 
     resize(width, height) {
@@ -102,16 +108,19 @@ export class RenderEngine {
 
             // Find Fingerprint for visualizer (Equalizer)
             let fp = null;
-            if (projectionTick && projectionTick.metrics.node_fingerprint) {
+            if (this.quality !== 'LOW' && projectionTick && projectionTick.metrics.node_fingerprint) {
                 const fps = projectionTick.metrics.node_fingerprint.fingerPrints;
                 fp = fps.find(f => f.domainId === id);
             }
             
-            planet.draw(this.ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fp);
+            // Pass quality to planet.draw
+            planet.draw(this.ctx, selectedObject, viewMode, aggregator, playbackTime, isPaused, fp, this.quality);
         }
 
         // Draw Particles
-        this.ctx.globalCompositeOperation = 'lighter';
+        if (this.quality === 'HIGH') {
+            this.ctx.globalCompositeOperation = 'lighter';
+        }
         for (const p of particles) {
             p.draw(this.ctx);
         }
